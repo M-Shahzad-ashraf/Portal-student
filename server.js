@@ -2010,10 +2010,13 @@ app.delete("/api/classes/:id/sections/:section", authenticate, async (req, res) 
 });
 
 // ==================== SERVER START ====================
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`\n🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📊 MongoDB: ${MONGODB_URI}`);
-  console.log(`\n✅ All endpoints ready!`);
-  console.log(`\n💡 Default admin: admin / admin123\n`);
-});
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 5000;
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📊 MongoDB Connected`);
+  });
+}
+
+module.exports = app;
