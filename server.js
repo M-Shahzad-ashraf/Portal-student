@@ -27,78 +27,291 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use(async (req, res, next) => {
+  if (req.path === "/api/health") return next();
+
+  try {
+    await initializeDatabase();
+    next();
+  } catch (error) {
+    return res.status(503).json({
+      success: false,
+      message: "Database unavailable. Please try again shortly.",
+    });
+  }
+});
+
 // ==================== MONGODB CONNECTION ====================
-const MONGODB_URI =
-  process.env.MONGODB_URI;
+const MONGODB_URI = process.env.MONGODB_URI;
+let isDatabaseReady = false;
+let databaseInitPromise = null;
+
+async function initializeDatabase() {
+  if (isDatabaseReady) return;
+  if (databaseInitPromise) return databaseInitPromise;
+
+  databaseInitPromise = (async () => {
+    if (!MONGODB_URI) {
+      throw new Error("MONGODB_URI is not defined");
+    }
+
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 20000,
+    });
+
+    console.log("✅ MongoDB Connected successfully");
+
+    await ensureDefaultAdmin();
+
+    const classesCount = await Class.countDocuments();
+    if (classesCount === 0) {
+      await seedDefaultClasses();
+      console.log("✅ Default classes created");
+    }
+
+    isDatabaseReady = true;
+    console.log("🎉 Server ready to use!");
+  })();
+
+  try {
+    await databaseInitPromise;
+  } catch (error) {
+    console.error("❌ Database initialization failed:", error.message);
+    databaseInitPromise = null;
+    throw error;
+  }
+}
 
 // ==================== DEFAULT ADMIN ====================
 async function ensureDefaultAdmin() {
-  let admin = await User.findOne({ role: "admin" });
+  let admin = await User.findOne({ username: "admin", role: "admin" });
+  if (!admin) {
+    admin = await User.findOne({ role: "admin" });
+  }
 
   if (!admin) {
-    admin = await User.create({
+    admin = new User({
       username: "admin",
       password: "admin123",
       role: "admin",
     });
-
-    console.log("✅ Default admin created");
-    return;
+    await admin.save();
+    console.log(
+      "✅ Default admin user created (username: admin, password: admin123)",
+    );
+    return admin;
   }
 
-  if (!admin.password.startsWith("$2")) {
+  // Fix admin saved without bcrypt hashing
+  if (admin.password && !admin.password.startsWith("$2")) {
     admin.password = "admin123";
     await admin.save();
-
-    console.log("✅ Admin password rehashed");
+    console.log("✅ Admin password fixed (re-hashed)");
   }
+
+  return admin;
 }
+
+initializeDatabase().catch((err) => {
+  console.error("❌ MongoDB Connection error:", err.message);
+  console.log("\n💡 Troubleshooting:");
+  console.log("   1. Make sure MongoDB is installed");
+  console.log("   2. Start MongoDB:");
+  console.log("      - Windows: net start MongoDB");
+  console.log("      - Mac: brew services start mongodb-community");
+  console.log("      - Linux: sudo systemctl start mongod");
+  console.log("   3. Or use MongoDB Atlas (cloud)");
+});
+
 // ==================== SEED FUNCTIONS ====================
 async function seedDefaultClasses() {
-  const classesCount = await Class.countDocuments();
+  const defaultClasses = [
+    // Boys Campus
+    {
+      id: "b1",
+      campusId: "boys",
+      name: "Class 1",
+      sections: ["A", "B", "C"],
+      order: 1,
+    },
+    {
+      id: "b2",
+      campusId: "boys",
+      name: "Class 2",
+      sections: ["A", "B", "C"],
+      order: 2,
+    },
+    {
+      id: "b3",
+      campusId: "boys",
+      name: "Class 3",
+      sections: ["A", "B"],
+      order: 3,
+    },
+    {
+      id: "b4",
+      campusId: "boys",
+      name: "Class 4",
+      sections: ["A", "B"],
+      order: 4,
+    },
+    {
+      id: "b5",
+      campusId: "boys",
+      name: "Class 5",
+      sections: ["A", "B", "C"],
+      order: 5,
+    },
+    {
+      id: "b6",
+      campusId: "boys",
+      name: "Class 6",
+      sections: ["A", "B"],
+      order: 6,
+    },
+    {
+      id: "b7",
+      campusId: "boys",
+      name: "Class 7",
+      sections: ["A", "B"],
+      order: 7,
+    },
+    {
+      id: "b8",
+      campusId: "boys",
+      name: "Class 8",
+      sections: ["A", "B"],
+      order: 8,
+    },
+    {
+      id: "b9",
+      campusId: "boys",
+      name: "Class 9",
+      sections: ["A", "B"],
+      order: 9,
+    },
+    {
+      id: "b10",
+      campusId: "boys",
+      name: "Class 10",
+      sections: ["A", "B", "C"],
+      order: 10,
+    },
+    // Girls Campus
+    {
+      id: "g1",
+      campusId: "girls",
+      name: "Class 1",
+      sections: ["A", "B"],
+      order: 1,
+    },
+    {
+      id: "g2",
+      campusId: "girls",
+      name: "Class 2",
+      sections: ["A", "B"],
+      order: 2,
+    },
+    {
+      id: "g3",
+      campusId: "girls",
+      name: "Class 3",
+      sections: ["A", "B"],
+      order: 3,
+    },
+    {
+      id: "g4",
+      campusId: "girls",
+      name: "Class 4",
+      sections: ["A", "B"],
+      order: 4,
+    },
+    {
+      id: "g5",
+      campusId: "girls",
+      name: "Class 5",
+      sections: ["A", "B"],
+      order: 5,
+    },
+    {
+      id: "g6",
+      campusId: "girls",
+      name: "Class 6",
+      sections: ["A", "B"],
+      order: 6,
+    },
+    {
+      id: "g7",
+      campusId: "girls",
+      name: "Class 7",
+      sections: ["A", "B"],
+      order: 7,
+    },
+    {
+      id: "g8",
+      campusId: "girls",
+      name: "Class 8",
+      sections: ["A", "B"],
+      order: 8,
+    },
+    {
+      id: "g9",
+      campusId: "girls",
+      name: "Class 9",
+      sections: ["A", "B"],
+      order: 9,
+    },
+    {
+      id: "g10",
+      campusId: "girls",
+      name: "Class 10",
+      sections: ["A", "B"],
+      order: 10,
+    },
+    // Kids Campus
+    {
+      id: "k1",
+      campusId: "kids",
+      name: "Nursery",
+      sections: ["A", "B"],
+      order: 1,
+    },
+    {
+      id: "k2",
+      campusId: "kids",
+      name: "Prep",
+      sections: ["A", "B"],
+      order: 2,
+    },
+    {
+      id: "k3",
+      campusId: "kids",
+      name: "Class 1",
+      sections: ["A", "B"],
+      order: 3,
+    },
+    {
+      id: "k4",
+      campusId: "kids",
+      name: "Class 2",
+      sections: ["A", "B"],
+      order: 4,
+    },
+    {
+      id: "k5",
+      campusId: "kids",
+      name: "Class 3",
+      sections: ["A", "B"],
+      order: 5,
+    },
+  ];
 
-  if (classesCount > 0) {
-    console.log("✅ Classes already exist");
-    return;
+  for (const cls of defaultClasses) {
+    const classDoc = new Class(cls);
+    await classDoc.save();
   }
-
-  await Class.insertMany(defaultClasses);
-
-  console.log("✅ Default classes inserted");
 }
-mongoose
-  .connect(MONGODB_URI)
-  .then(async () => {
-    console.log("✅ MongoDB Connected successfully");
-
-    try {
-      await ensureDefaultAdmin();
-
-      const classesCount = await Class.countDocuments();
-
-      if (classesCount === 0) {
-        await seedDefaultClasses();
-        console.log("✅ Default classes created");
-      }
-
-    } catch (error) {
-      console.error("❌ Startup Error:", error);
-    }
-
-    // Server hamesha start hoga
-    const PORT = process.env.PORT || 5000;
-
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log("🎉 Server ready to use!");
-    });
-  })
-  .catch((err) => {
-    console.error("❌ MongoDB Connection Error");
-    console.error(err);
-  });
-
-
 
 async function seedSampleStudents() {
   const classes = await Class.find();
@@ -251,7 +464,7 @@ app.post("/api/auth/admin/login", async (req, res) => {
     const token = jwt.sign(
       { userId: user._id, role: user.role, username: user.username },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || "7d" }
+      { expiresIn: process.env.JWT_EXPIRE || "7d" },
     );
 
     res.json({
@@ -290,7 +503,7 @@ app.post("/api/auth/student/login", async (req, res) => {
     const token = jwt.sign(
       { userId: user._id, role: user.role, studentId },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || "7d" }
+      { expiresIn: process.env.JWT_EXPIRE || "7d" },
     );
 
     res.json({
@@ -344,7 +557,7 @@ app.post("/api/auth/student/signup", async (req, res) => {
     const token = jwt.sign(
       { userId: user._id, role: "student", studentId },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || "7d" }
+      { expiresIn: process.env.JWT_EXPIRE || "7d" },
     );
 
     res.json({
@@ -390,7 +603,9 @@ app.get("/api/dashboard/stats", authenticate, async (req, res) => {
       totalCollected = 0;
 
     students.forEach((student) => {
-      const monthRecord = student.feeRecords.find((r) => r.month === currentMonth);
+      const monthRecord = student.feeRecords.find(
+        (r) => r.month === currentMonth,
+      );
       if (monthRecord) {
         if (monthRecord.status === "Paid") {
           paid++;
@@ -413,12 +628,14 @@ app.get("/api/dashboard/stats", authenticate, async (req, res) => {
     const campusStats = {};
 
     for (const campusId of campusesList) {
-      const campusStudents = students.filter(s => s.campusId === campusId);
+      const campusStudents = students.filter((s) => s.campusId === campusId);
       const campusClassesCount = await Class.countDocuments({ campusId });
 
       let campusPaid = 0;
       campusStudents.forEach((student) => {
-        const monthRecord = student.feeRecords.find((r) => r.month === currentMonth);
+        const monthRecord = student.feeRecords.find(
+          (r) => r.month === currentMonth,
+        );
         if (monthRecord && monthRecord.status === "Paid") {
           campusPaid++;
         }
@@ -502,25 +719,30 @@ app.get("/api/students/export", authenticate, async (req, res) => {
     if (classId) query.classId = classId;
     if (section) query.section = section;
 
-    const students = await Student.find(query).sort({ campusId: 1, classId: 1, section: 1, name: 1 });
+    const students = await Student.find(query).sort({
+      campusId: 1,
+      classId: 1,
+      section: 1,
+      name: 1,
+    });
 
     const rows = students.map((s, i) => ({
       "#": i + 1,
       "Student ID": s.id,
-      "Name": s.name,
+      Name: s.name,
       "Father Name": s.fatherName,
       "Father Phone": s.fatherPhone || "",
-      "Campus": s.campusId,
+      Campus: s.campusId,
       "Class ID": s.classId,
-      "Section": s.section,
+      Section: s.section,
       "Roll No": s.rollNo || "",
-      "Gender": s.gender || "",
-      "DOB": s.dob ? new Date(s.dob).toISOString().split("T")[0] : "",
+      Gender: s.gender || "",
+      DOB: s.dob ? new Date(s.dob).toISOString().split("T")[0] : "",
       "Blood Group": s.bloodGroup || "",
       "Monthly Fee": s.monthlyFee || 2000,
       "B-Form": s.bForm || "",
-      "Email": s.email || "",
-      "Address": s.address || "",
+      Email: s.email || "",
+      Address: s.address || "",
     }));
 
     const wb = XLSX.utils.book_new();
@@ -530,13 +752,22 @@ app.get("/api/students/export", authenticate, async (req, res) => {
     if (format === "csv") {
       const csv = XLSX.utils.sheet_to_csv(ws);
       res.setHeader("Content-Type", "text/csv");
-      res.setHeader("Content-Disposition", `attachment; filename=students_${Date.now()}.csv`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename=students_${Date.now()}.csv`,
+      );
       return res.send(csv);
     }
 
     const buf = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename=students_${Date.now()}.xlsx`);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=students_${Date.now()}.xlsx`,
+    );
     res.send(buf);
   } catch (error) {
     console.error("Export error:", error);
@@ -545,98 +776,149 @@ app.get("/api/students/export", authenticate, async (req, res) => {
 });
 
 // Import students from xlsx/csv
-app.post("/api/students/import", authenticate, upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "No file uploaded" });
-    }
-
-    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws);
-
-    if (!rows.length) {
-      return res.status(400).json({ success: false, message: "File is empty" });
-    }
-
-    const results = { created: 0, skipped: 0, errors: [] };
-
-    for (const row of rows) {
-      try {
-        const name = row["Name"] || row["name"];
-        const fatherName = row["Father Name"] || row["fatherName"];
-        const campusId = (row["Campus"] || row["campusId"] || "").toLowerCase();
-        const classId = row["Class ID"] || row["classId"];
-        const section = (row["Section"] || row["section"] || "").toUpperCase();
-
-        if (!name || !fatherName || !campusId || !classId || !section) {
-          results.errors.push(`Row skipped — missing required fields: ${JSON.stringify(row)}`);
-          results.skipped++;
-          continue;
-        }
-
-        // Generate student ID
-        const lastStudent = await Student.findOne().sort({ createdAt: -1 });
-        let lastNum = 1000;
-        if (lastStudent?.id) {
-          const match = lastStudent.id.match(/S(\d+)/);
-          if (match) lastNum = parseInt(match[1]);
-        }
-        const studentId = `S${lastNum + 1}`;
-
-        const studentCount = await Student.countDocuments({ campusId, classId, section, active: true });
-        const rollNo = `${campusId.charAt(0).toUpperCase()}${classId}${section}${String(studentCount + 1).padStart(2, "0")}`;
-
-        const monthlyFee = parseInt(row["Monthly Fee"] || row["monthlyFee"]) || 2000;
-        const now = new Date();
-        const academicStartYear = now.getMonth() < 2 ? now.getFullYear() - 1 : now.getFullYear();
-        const academicMonths = ["March","April","May","June","July","August","September","October","November","December","January","February"];
-        const feeRecords = academicMonths.map((month) => ({
-          month,
-          year: month === "January" || month === "February" ? academicStartYear + 1 : academicStartYear,
-          status: "Unpaid",
-          amount: monthlyFee,
-        }));
-
-        const student = new Student({
-          id: studentId,
-          name,
-          fatherName,
-          fatherPhone: row["Father Phone"] || row["fatherPhone"] || "",
-          campusId,
-          classId,
-          section,
-          rollNo,
-          gender: row["Gender"] || row["gender"] || (campusId === "girls" ? "F" : "M"),
-          dob: row["DOB"] || row["dob"] || null,
-          bloodGroup: row["Blood Group"] || row["bloodGroup"] || "",
-          monthlyFee,
-          bForm: row["B-Form"] || row["bForm"] || "",
-          email: row["Email"] || row["email"] || "",
-          address: row["Address"] || row["address"] || "",
-          feeRecords,
-          admissionDate: new Date(),
-          active: true,
-        });
-
-        await student.save();
-        results.created++;
-      } catch (rowErr) {
-        results.errors.push(`Row error: ${rowErr.message}`);
-        results.skipped++;
+app.post(
+  "/api/students/import",
+  authenticate,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({ success: false, message: "No file uploaded" });
       }
-    }
 
-    res.json({
-      success: true,
-      message: `Import complete: ${results.created} students created, ${results.skipped} skipped`,
-      data: results,
-    });
-  } catch (error) {
-    console.error("Import error:", error);
-    res.status(500).json({ success: false, message: "Import failed", error: error.message });
-  }
-});
+      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws);
+
+      if (!rows.length) {
+        return res
+          .status(400)
+          .json({ success: false, message: "File is empty" });
+      }
+
+      const results = { created: 0, skipped: 0, errors: [] };
+
+      for (const row of rows) {
+        try {
+          const name = row["Name"] || row["name"];
+          const fatherName = row["Father Name"] || row["fatherName"];
+          const campusId = (
+            row["Campus"] ||
+            row["campusId"] ||
+            ""
+          ).toLowerCase();
+          const classId = row["Class ID"] || row["classId"];
+          const section = (
+            row["Section"] ||
+            row["section"] ||
+            ""
+          ).toUpperCase();
+
+          if (!name || !fatherName || !campusId || !classId || !section) {
+            results.errors.push(
+              `Row skipped — missing required fields: ${JSON.stringify(row)}`,
+            );
+            results.skipped++;
+            continue;
+          }
+
+          // Generate student ID
+          const lastStudent = await Student.findOne().sort({ createdAt: -1 });
+          let lastNum = 1000;
+          if (lastStudent?.id) {
+            const match = lastStudent.id.match(/S(\d+)/);
+            if (match) lastNum = parseInt(match[1]);
+          }
+          const studentId = `S${lastNum + 1}`;
+
+          const studentCount = await Student.countDocuments({
+            campusId,
+            classId,
+            section,
+            active: true,
+          });
+          const rollNo = `${campusId.charAt(0).toUpperCase()}${classId}${section}${String(studentCount + 1).padStart(2, "0")}`;
+
+          const monthlyFee =
+            parseInt(row["Monthly Fee"] || row["monthlyFee"]) || 2000;
+          const now = new Date();
+          const academicStartYear =
+            now.getMonth() < 2 ? now.getFullYear() - 1 : now.getFullYear();
+          const academicMonths = [
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+            "January",
+            "February",
+          ];
+          const feeRecords = academicMonths.map((month) => ({
+            month,
+            year:
+              month === "January" || month === "February"
+                ? academicStartYear + 1
+                : academicStartYear,
+            status: "Unpaid",
+            amount: monthlyFee,
+          }));
+
+          const student = new Student({
+            id: studentId,
+            name,
+            fatherName,
+            fatherPhone: row["Father Phone"] || row["fatherPhone"] || "",
+            campusId,
+            classId,
+            section,
+            rollNo,
+            gender:
+              row["Gender"] ||
+              row["gender"] ||
+              (campusId === "girls" ? "F" : "M"),
+            dob: row["DOB"] || row["dob"] || null,
+            bloodGroup: row["Blood Group"] || row["bloodGroup"] || "",
+            monthlyFee,
+            bForm: row["B-Form"] || row["bForm"] || "",
+            email: row["Email"] || row["email"] || "",
+            address: row["Address"] || row["address"] || "",
+            feeRecords,
+            admissionDate: new Date(),
+            active: true,
+          });
+
+          await student.save();
+          results.created++;
+        } catch (rowErr) {
+          results.errors.push(`Row error: ${rowErr.message}`);
+          results.skipped++;
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Import complete: ${results.created} students created, ${results.skipped} skipped`,
+        data: results,
+      });
+    } catch (error) {
+      console.error("Import error:", error);
+      res
+        .status(500)
+        .json({
+          success: false,
+          message: "Import failed",
+          error: error.message,
+        });
+    }
+  },
+);
 
 app.get("/api/students", authenticate, async (req, res) => {
   try {
@@ -652,7 +934,7 @@ app.get("/api/students", authenticate, async (req, res) => {
 
     // Support both param names: campusId OR campus, classId OR class
     const finalCampusId = campusId || campus;
-    const finalClassId = classId || req.query['class'];
+    const finalClassId = classId || req.query["class"];
 
     let query = { active: true };
 
@@ -771,15 +1053,28 @@ app.post("/api/students", authenticate, async (req, res) => {
 
     // Create fee records for academic year (March - February)
     const academicMonths = [
-      "March", "April", "May", "June", "July", "August",
-      "September", "October", "November", "December",
-      "January", "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+      "January",
+      "February",
     ];
     const now = new Date();
-    const academicStartYear = now.getMonth() < 2 ? now.getFullYear() - 1 : now.getFullYear();
+    const academicStartYear =
+      now.getMonth() < 2 ? now.getFullYear() - 1 : now.getFullYear();
     const feeRecords = academicMonths.map((month) => ({
       month,
-      year: month === "January" || month === "February" ? academicStartYear + 1 : academicStartYear,
+      year:
+        month === "January" || month === "February"
+          ? academicStartYear + 1
+          : academicStartYear,
       status: "Unpaid",
       amount: monthlyFee || 2000,
     }));
@@ -1018,13 +1313,32 @@ app.delete("/api/classes/:id", authenticate, async (req, res) => {
 
 // ==================== FEE ROUTES ====================
 const ACADEMIC_FEE_MONTHS = [
-  "March", "April", "May", "June", "July", "August",
-  "September", "October", "November", "December",
-  "January", "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+  "January",
+  "February",
 ];
 const CALENDAR_MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 const getAcademicYearStart = (date = new Date()) => {
@@ -1033,14 +1347,20 @@ const getAcademicYearStart = (date = new Date()) => {
   return month < 2 ? year - 1 : year;
 };
 
-const getFeeYearForMonth = (month, academicStartYear = getAcademicYearStart()) => {
+const getFeeYearForMonth = (
+  month,
+  academicStartYear = getAcademicYearStart(),
+) => {
   if (month === "January" || month === "February") return academicStartYear + 1;
   return academicStartYear;
 };
 
 const getCurrentMonthName = () => CALENDAR_MONTHS[new Date().getMonth()];
 
-const buildMonthlyRecordsMap = (feeRecords, academicStartYear = getAcademicYearStart()) => {
+const buildMonthlyRecordsMap = (
+  feeRecords,
+  academicStartYear = getAcademicYearStart(),
+) => {
   const map = {};
   ACADEMIC_FEE_MONTHS.forEach((month) => {
     const year = getFeeYearForMonth(month, academicStartYear);
@@ -1156,57 +1476,61 @@ app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
   }
 });
 
-app.get("/api/fees/student/:studentId/summary", authenticate, async (req, res) => {
-  try {
-    const student = await Student.findOne({ id: req.params.studentId });
-    if (!student) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Student not found" });
+app.get(
+  "/api/fees/student/:studentId/summary",
+  authenticate,
+  async (req, res) => {
+    try {
+      const student = await Student.findOne({ id: req.params.studentId });
+      if (!student) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Student not found" });
+      }
+
+      const academicStartYear = getAcademicYearStart();
+      const currentMonth = getCurrentMonthName();
+      const monthlyRecords = buildMonthlyRecordsMap(
+        student.feeRecords,
+        academicStartYear,
+      );
+
+      const totalPaid = student.feeRecords.reduce((sum, r) => {
+        if (r.status === "Paid") return sum + r.amount;
+        if (r.status === "Partial") return sum + (r.paidAmount || 0);
+        return sum;
+      }, 0);
+
+      let monthsPassed = 0;
+      for (const month of ACADEMIC_FEE_MONTHS) {
+        monthsPassed++;
+        if (month === currentMonth) break;
+      }
+      const totalDue = monthsPassed * student.monthlyFee;
+
+      res.json({
+        success: true,
+        data: {
+          studentId: student.id,
+          studentName: student.name,
+          monthlyFee: student.monthlyFee,
+          totalPaid,
+          totalDue,
+          outstanding: Math.max(0, totalDue - totalPaid),
+          currentMonth,
+          academicYear: `${academicStartYear}-${academicStartYear + 1}`,
+          monthlyRecords,
+          monthlyBreakdown: student.feeRecords,
+        },
+      });
+    } catch (error) {
+      console.error("Student fee summary error:", error);
+      res
+        .status(500)
+        .json({ success: false, message: "Failed to fetch fee summary" });
     }
-
-    const academicStartYear = getAcademicYearStart();
-    const currentMonth = getCurrentMonthName();
-    const monthlyRecords = buildMonthlyRecordsMap(
-      student.feeRecords,
-      academicStartYear,
-    );
-
-    const totalPaid = student.feeRecords.reduce((sum, r) => {
-      if (r.status === "Paid") return sum + r.amount;
-      if (r.status === "Partial") return sum + (r.paidAmount || 0);
-      return sum;
-    }, 0);
-
-    let monthsPassed = 0;
-    for (const month of ACADEMIC_FEE_MONTHS) {
-      monthsPassed++;
-      if (month === currentMonth) break;
-    }
-    const totalDue = monthsPassed * student.monthlyFee;
-
-    res.json({
-      success: true,
-      data: {
-        studentId: student.id,
-        studentName: student.name,
-        monthlyFee: student.monthlyFee,
-        totalPaid,
-        totalDue,
-        outstanding: Math.max(0, totalDue - totalPaid),
-        currentMonth,
-        academicYear: `${academicStartYear}-${academicStartYear + 1}`,
-        monthlyRecords,
-        monthlyBreakdown: student.feeRecords,
-      },
-    });
-  } catch (error) {
-    console.error("Student fee summary error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch fee summary" });
-  }
-});
+  },
+);
 
 app.put(
   "/api/fees/student/:studentId/month/:month/year/:year",
@@ -1271,7 +1595,8 @@ app.put(
 );
 
 app.get(
-  "/api/fees/student/:studentId/challan/:month/:year", authenticate,
+  "/api/fees/student/:studentId/challan/:month/:year",
+  authenticate,
   async (req, res) => {
     try {
       const { studentId, month, year } = req.params;
@@ -1351,7 +1676,16 @@ app.get(
 
 // GET /api/expenses/categories — must be before /:id
 app.get("/api/expenses/categories", authenticate, (req, res) => {
-  const categories = ["Salaries","Supplies","Utilities","Maintenance","Equipment","Transport","Events","Other"];
+  const categories = [
+    "Salaries",
+    "Supplies",
+    "Utilities",
+    "Maintenance",
+    "Equipment",
+    "Transport",
+    "Events",
+    "Other",
+  ];
   res.json({ success: true, data: categories });
 });
 
@@ -1360,10 +1694,11 @@ app.get("/api/expenses", authenticate, async (req, res) => {
     const { page = 1, limit = 50, category, search } = req.query;
     let query = {};
     if (category && category !== "all") query.category = category;
-    if (search) query.$or = [
-      { title: { $regex: search, $options: "i" } },
-      { description: { $regex: search, $options: "i" } },
-    ];
+    if (search)
+      query.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+      ];
 
     const total = await Expense.countDocuments(query);
     const expenseDocs = await Expense.find(query)
@@ -1410,25 +1745,42 @@ app.get("/api/expenses", authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error("Get expenses error:", error);
-    res.status(500).json({ success: false, message: "Failed to fetch expenses" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch expenses" });
   }
 });
 
 app.get("/api/expenses/:id", authenticate, async (req, res) => {
   try {
     const expense = await Expense.findById(req.params.id);
-    if (!expense) return res.status(404).json({ success: false, message: "Expense not found" });
+    if (!expense)
+      return res
+        .status(404)
+        .json({ success: false, message: "Expense not found" });
     res.json({ success: true, data: expense });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to fetch expense" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch expense" });
   }
 });
 
 app.post("/api/expenses", authenticate, async (req, res) => {
   try {
-    const { title, category, amount, date, description, paymentMethod, receipt } = req.body;
+    const {
+      title,
+      category,
+      amount,
+      date,
+      description,
+      paymentMethod,
+      receipt,
+    } = req.body;
     if (!category || !amount) {
-      return res.status(400).json({ success: false, message: "Category and amount are required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Category and amount are required" });
     }
     const expense = new Expense({
       title: title || description || category,
@@ -1446,7 +1798,9 @@ app.post("/api/expenses", authenticate, async (req, res) => {
       title: expense.title,
       category: expense.category,
       amount: expense.amount,
-      date: expense.date ? new Date(expense.date).toISOString().split("T")[0] : "",
+      date: expense.date
+        ? new Date(expense.date).toISOString().split("T")[0]
+        : "",
       description: expense.description,
       paymentMethod: expense.paymentMethod,
       receipt: expense.receipt,
@@ -1456,13 +1810,23 @@ app.post("/api/expenses", authenticate, async (req, res) => {
     res.status(201).json({ success: true, data: saved });
   } catch (error) {
     console.error("Create expense error:", error);
-    res.status(500).json({ success: false, message: "Failed to create expense" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to create expense" });
   }
 });
 
 app.put("/api/expenses/:id", authenticate, async (req, res) => {
   try {
-    const { title, category, amount, date, description, paymentMethod, receipt } = req.body;
+    const {
+      title,
+      category,
+      amount,
+      date,
+      description,
+      paymentMethod,
+      receipt,
+    } = req.body;
     const updates = {};
     if (title !== undefined) updates.title = title;
     if (category !== undefined) updates.category = category;
@@ -1472,23 +1836,37 @@ app.put("/api/expenses/:id", authenticate, async (req, res) => {
     if (paymentMethod !== undefined) updates.paymentMethod = paymentMethod;
     if (receipt !== undefined) updates.receipt = receipt;
 
-    const expense = await Expense.findByIdAndUpdate(req.params.id, { $set: updates }, { new: true });
-    if (!expense) return res.status(404).json({ success: false, message: "Expense not found" });
+    const expense = await Expense.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true },
+    );
+    if (!expense)
+      return res
+        .status(404)
+        .json({ success: false, message: "Expense not found" });
     res.json({ success: true, data: expense });
   } catch (error) {
     console.error("Update expense error:", error);
-    res.status(500).json({ success: false, message: "Failed to update expense" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to update expense" });
   }
 });
 
 app.delete("/api/expenses/:id", authenticate, async (req, res) => {
   try {
     const expense = await Expense.findByIdAndDelete(req.params.id);
-    if (!expense) return res.status(404).json({ success: false, message: "Expense not found" });
+    if (!expense)
+      return res
+        .status(404)
+        .json({ success: false, message: "Expense not found" });
     res.json({ success: true, message: "Expense deleted successfully" });
   } catch (error) {
     console.error("Delete expense error:", error);
-    res.status(500).json({ success: false, message: "Failed to delete expense" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to delete expense" });
   }
 });
 
@@ -1497,7 +1875,8 @@ const DEFAULT_SETTINGS_VALUES = {
   schoolName: "Muslim Model High School Pattoki",
   schoolAddress: "Pattoki City, Kasur, Punjab",
   schoolPhone: "049-4412345",
-  bankDetails: "Allied Bank Ltd, Pattoki (Branch Code: 0292) A/C No: 0110-38491029-01",
+  bankDetails:
+    "Allied Bank Ltd, Pattoki (Branch Code: 0292) A/C No: 0110-38491029-01",
   defaultFee: 2000,
   lateFee: 200,
   dueDateDay: 10,
@@ -1529,7 +1908,9 @@ app.get("/api/settings", authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error("Get settings error:", error);
-    res.status(500).json({ success: false, message: "Failed to load settings" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to load settings" });
   }
 });
 
@@ -1544,8 +1925,10 @@ app.put("/api/settings", authenticate, async (req, res) => {
     if (adminData) {
       const admin = await User.findOne({ role: "admin" });
       if (admin) {
-        if (adminData.username?.trim()) admin.username = adminData.username.trim();
-        if (adminData.password?.trim()) admin.password = adminData.password.trim();
+        if (adminData.username?.trim())
+          admin.username = adminData.username.trim();
+        if (adminData.password?.trim())
+          admin.password = adminData.password.trim();
         await admin.save();
       } else {
         const newAdmin = new User({
@@ -1577,7 +1960,9 @@ app.put("/api/settings", authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error("Update settings error:", error);
-    res.status(500).json({ success: false, message: "Failed to save settings" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to save settings" });
   }
 });
 
@@ -1591,170 +1976,311 @@ app.post("/api/settings/reset", authenticate, async (req, res) => {
       data: settingsDoc,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to reset settings" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to reset settings" });
   }
 });
 
 // ==================== CHALLAN PDF ROUTE ====================
-app.get("/api/fees/student/:studentId/challan/:month/:year/pdf", authenticate, async (req, res) => {
-  try {
-    const { studentId, month, year } = req.params;
-    const student = await Student.findOne({ id: studentId });
-    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+app.get(
+  "/api/fees/student/:studentId/challan/:month/:year/pdf",
+  authenticate,
+  async (req, res) => {
+    try {
+      const { studentId, month, year } = req.params;
+      const student = await Student.findOne({ id: studentId });
+      if (!student)
+        return res
+          .status(404)
+          .json({ success: false, message: "Student not found" });
 
-    const settingsDoc = await Settings.getSingleton();
-    const schoolName = settingsDoc.schoolName || "Muslim Model High School Pattoki";
-    const schoolAddress = settingsDoc.schoolAddress || "Pattoki City, Kasur, Punjab";
-    const schoolPhone = settingsDoc.schoolPhone || "";
-    const bankDetails = settingsDoc.bankDetails || "";
-    const lateFee = settingsDoc.lateFee || 200;
-    const dueDateDay = settingsDoc.dueDateDay || 10;
+      const settingsDoc = await Settings.getSingleton();
+      const schoolName =
+        settingsDoc.schoolName || "Muslim Model High School Pattoki";
+      const schoolAddress =
+        settingsDoc.schoolAddress || "Pattoki City, Kasur, Punjab";
+      const schoolPhone = settingsDoc.schoolPhone || "";
+      const bankDetails = settingsDoc.bankDetails || "";
+      const lateFee = settingsDoc.lateFee || 200;
+      const dueDateDay = settingsDoc.dueDateDay || 10;
 
-    const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-    const targetIndex = months.indexOf(month);
-    const yearInt = parseInt(year);
-
-    let arrears = 0;
-    for (let i = 0; i < targetIndex; i++) {
-      const record = student.feeRecords.find((r) => r.month === months[i] && r.year === yearInt);
-      if (!record || record.status === "Unpaid") arrears += student.monthlyFee;
-      else if (record.status === "Partial") arrears += student.monthlyFee - (record.paidAmount || 0);
-    }
-
-    const currentFee = student.monthlyFee;
-    const totalWithinDue = currentFee + arrears;
-    const totalAfterDue = totalWithinDue + lateFee;
-    const dueDate = `${year}-${String(targetIndex + 1).padStart(2,"0")}-${String(dueDateDay).padStart(2,"0")}`;
-    const challanNo = `CH-${student.id.substring(1)}-${String(targetIndex + 1).padStart(2,"0")}${year.toString().slice(-2)}`;
-    const currentStatus = student.feeRecords.find((r) => r.month === month && r.year === yearInt)?.status || "Unpaid";
-
-    const campusLabel = student.campusId === "boys" ? "Boys Campus" : student.campusId === "girls" ? "Girls Campus" : "Kids Campus";
-
-    // --- PDF Generation (A4, 3-copy family style) ---
-    const doc = new PDFDocument({ size: "A4", margin: 0 });
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename=challan_${studentId}_${month}_${year}.pdf`);
-    doc.pipe(res);
-
-    const pageW = 595.28;
-    const pageH = 841.89;
-    const copyH = pageH / 3; // ~280px per copy
-    const copyLabels = ["Bank Copy", "School Copy", "Student Copy"];
-    const themeColor = "#1a56a0";
-    const accentColor = "#e63946";
-
-    copyLabels.forEach((copyLabel, idx) => {
-      const yBase = idx * copyH;
-      const pad = 18;
-      const innerW = pageW - pad * 2;
-
-      // Background stripe at top
-      doc.rect(0, yBase, pageW, 38).fill(themeColor);
-
-      // School name
-      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(10)
-        .text(schoolName, pad, yBase + 7, { width: innerW - 80, align: "left" });
-
-      // Copy label badge
-      doc.rect(pageW - 90, yBase + 8, 75, 20).fill(accentColor);
-      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8)
-        .text(copyLabel, pageW - 90, yBase + 13, { width: 75, align: "center" });
-
-      // Address and phone
-      doc.fillColor("#ccddff").font("Helvetica").fontSize(7)
-        .text(`${schoolAddress}  |  ${schoolPhone}`, pad, yBase + 22, { width: innerW - 80 });
-
-      // Challan title
-      doc.fillColor("#1a56a0").font("Helvetica-Bold").fontSize(9)
-        .text("FEE CHALLAN", 0, yBase + 42, { width: pageW, align: "center" });
-
-      // Divider
-      doc.moveTo(pad, yBase + 54).lineTo(pageW - pad, yBase + 54).strokeColor("#c0cfe0").lineWidth(0.5).stroke();
-
-      // Two-column info
-      const leftX = pad;
-      const rightX = pageW / 2 + 10;
-      const infoY = yBase + 58;
-      const lineH = 13;
-
-      const drawField = (label, value, x, y, w) => {
-        doc.fillColor("#666666").font("Helvetica").fontSize(6.5)
-          .text(label.toUpperCase(), x, y, { width: w });
-        doc.fillColor("#111111").font("Helvetica-Bold").fontSize(7.5)
-          .text(value || "—", x, y + 7, { width: w });
-      };
-
-      drawField("Student Name", student.name, leftX, infoY, 145);
-      drawField("Challan No", challanNo, rightX, infoY, 145);
-
-      drawField("Father Name", student.fatherName, leftX, infoY + lineH * 1.5, 145);
-      drawField("Month / Year", `${month} ${year}`, rightX, infoY + lineH * 1.5, 145);
-
-      drawField("Class / Section", `${student.classId} - ${student.section}`, leftX, infoY + lineH * 3, 145);
-      drawField("Due Date", dueDate, rightX, infoY + lineH * 3, 145);
-
-      drawField("Roll No", student.rollNo || "—", leftX, infoY + lineH * 4.5, 145);
-      drawField("Campus", campusLabel, rightX, infoY + lineH * 4.5, 145);
-
-      // Fee table
-      const tableY = yBase + 152;
-      const tableH = 16;
-      const cols = { label: pad, amount: pageW - 90 };
-      const tableW = innerW;
-
-      // Table header
-      doc.rect(pad, tableY, tableW, tableH).fill("#e8f0fc");
-      doc.fillColor("#1a56a0").font("Helvetica-Bold").fontSize(7)
-        .text("DESCRIPTION", cols.label + 4, tableY + 4, { width: 200 })
-        .text("AMOUNT (Rs)", cols.amount - 10, tableY + 4, { width: 80, align: "right" });
-
-      const rows = [
-        ["Monthly Tuition Fee", `Rs. ${currentFee.toLocaleString()}`],
-        ["Arrears (Previous Dues)", arrears > 0 ? `Rs. ${arrears.toLocaleString()}` : "—"],
-        ["Total (Within Due Date)", `Rs. ${totalWithinDue.toLocaleString()}`],
-        [`Late Fee (after ${dueDate})`, `Rs. ${totalAfterDue.toLocaleString()}`],
+      const months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
       ];
+      const targetIndex = months.indexOf(month);
+      const yearInt = parseInt(year);
 
-      rows.forEach(([label, amount], i) => {
-        const rowY = tableY + tableH + i * tableH;
-        if (i % 2 === 1) doc.rect(pad, rowY, tableW, tableH).fill("#f7faff");
-        const isBold = label.includes("Total") || label.includes("Late");
-        doc.fillColor(isBold ? "#1a56a0" : "#222222")
-          .font(isBold ? "Helvetica-Bold" : "Helvetica").fontSize(7)
-          .text(label, cols.label + 4, rowY + 4, { width: 200 })
-          .text(amount, cols.amount - 10, rowY + 4, { width: 80, align: "right" });
+      let arrears = 0;
+      for (let i = 0; i < targetIndex; i++) {
+        const record = student.feeRecords.find(
+          (r) => r.month === months[i] && r.year === yearInt,
+        );
+        if (!record || record.status === "Unpaid")
+          arrears += student.monthlyFee;
+        else if (record.status === "Partial")
+          arrears += student.monthlyFee - (record.paidAmount || 0);
+      }
+
+      const currentFee = student.monthlyFee;
+      const totalWithinDue = currentFee + arrears;
+      const totalAfterDue = totalWithinDue + lateFee;
+      const dueDate = `${year}-${String(targetIndex + 1).padStart(2, "0")}-${String(dueDateDay).padStart(2, "0")}`;
+      const challanNo = `CH-${student.id.substring(1)}-${String(targetIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`;
+      const currentStatus =
+        student.feeRecords.find((r) => r.month === month && r.year === yearInt)
+          ?.status || "Unpaid";
+
+      const campusLabel =
+        student.campusId === "boys"
+          ? "Boys Campus"
+          : student.campusId === "girls"
+            ? "Girls Campus"
+            : "Kids Campus";
+
+      // --- PDF Generation (A4, 3-copy family style) ---
+      const doc = new PDFDocument({ size: "A4", margin: 0 });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename=challan_${studentId}_${month}_${year}.pdf`,
+      );
+      doc.pipe(res);
+
+      const pageW = 595.28;
+      const pageH = 841.89;
+      const copyH = pageH / 3; // ~280px per copy
+      const copyLabels = ["Bank Copy", "School Copy", "Student Copy"];
+      const themeColor = "#1a56a0";
+      const accentColor = "#e63946";
+
+      copyLabels.forEach((copyLabel, idx) => {
+        const yBase = idx * copyH;
+        const pad = 18;
+        const innerW = pageW - pad * 2;
+
+        // Background stripe at top
+        doc.rect(0, yBase, pageW, 38).fill(themeColor);
+
+        // School name
+        doc
+          .fillColor("#ffffff")
+          .font("Helvetica-Bold")
+          .fontSize(10)
+          .text(schoolName, pad, yBase + 7, {
+            width: innerW - 80,
+            align: "left",
+          });
+
+        // Copy label badge
+        doc.rect(pageW - 90, yBase + 8, 75, 20).fill(accentColor);
+        doc
+          .fillColor("#ffffff")
+          .font("Helvetica-Bold")
+          .fontSize(8)
+          .text(copyLabel, pageW - 90, yBase + 13, {
+            width: 75,
+            align: "center",
+          });
+
+        // Address and phone
+        doc
+          .fillColor("#ccddff")
+          .font("Helvetica")
+          .fontSize(7)
+          .text(`${schoolAddress}  |  ${schoolPhone}`, pad, yBase + 22, {
+            width: innerW - 80,
+          });
+
+        // Challan title
+        doc
+          .fillColor("#1a56a0")
+          .font("Helvetica-Bold")
+          .fontSize(9)
+          .text("FEE CHALLAN", 0, yBase + 42, {
+            width: pageW,
+            align: "center",
+          });
+
+        // Divider
+        doc
+          .moveTo(pad, yBase + 54)
+          .lineTo(pageW - pad, yBase + 54)
+          .strokeColor("#c0cfe0")
+          .lineWidth(0.5)
+          .stroke();
+
+        // Two-column info
+        const leftX = pad;
+        const rightX = pageW / 2 + 10;
+        const infoY = yBase + 58;
+        const lineH = 13;
+
+        const drawField = (label, value, x, y, w) => {
+          doc
+            .fillColor("#666666")
+            .font("Helvetica")
+            .fontSize(6.5)
+            .text(label.toUpperCase(), x, y, { width: w });
+          doc
+            .fillColor("#111111")
+            .font("Helvetica-Bold")
+            .fontSize(7.5)
+            .text(value || "—", x, y + 7, { width: w });
+        };
+
+        drawField("Student Name", student.name, leftX, infoY, 145);
+        drawField("Challan No", challanNo, rightX, infoY, 145);
+
+        drawField(
+          "Father Name",
+          student.fatherName,
+          leftX,
+          infoY + lineH * 1.5,
+          145,
+        );
+        drawField(
+          "Month / Year",
+          `${month} ${year}`,
+          rightX,
+          infoY + lineH * 1.5,
+          145,
+        );
+
+        drawField(
+          "Class / Section",
+          `${student.classId} - ${student.section}`,
+          leftX,
+          infoY + lineH * 3,
+          145,
+        );
+        drawField("Due Date", dueDate, rightX, infoY + lineH * 3, 145);
+
+        drawField(
+          "Roll No",
+          student.rollNo || "—",
+          leftX,
+          infoY + lineH * 4.5,
+          145,
+        );
+        drawField("Campus", campusLabel, rightX, infoY + lineH * 4.5, 145);
+
+        // Fee table
+        const tableY = yBase + 152;
+        const tableH = 16;
+        const cols = { label: pad, amount: pageW - 90 };
+        const tableW = innerW;
+
+        // Table header
+        doc.rect(pad, tableY, tableW, tableH).fill("#e8f0fc");
+        doc
+          .fillColor("#1a56a0")
+          .font("Helvetica-Bold")
+          .fontSize(7)
+          .text("DESCRIPTION", cols.label + 4, tableY + 4, { width: 200 })
+          .text("AMOUNT (Rs)", cols.amount - 10, tableY + 4, {
+            width: 80,
+            align: "right",
+          });
+
+        const rows = [
+          ["Monthly Tuition Fee", `Rs. ${currentFee.toLocaleString()}`],
+          [
+            "Arrears (Previous Dues)",
+            arrears > 0 ? `Rs. ${arrears.toLocaleString()}` : "—",
+          ],
+          ["Total (Within Due Date)", `Rs. ${totalWithinDue.toLocaleString()}`],
+          [
+            `Late Fee (after ${dueDate})`,
+            `Rs. ${totalAfterDue.toLocaleString()}`,
+          ],
+        ];
+
+        rows.forEach(([label, amount], i) => {
+          const rowY = tableY + tableH + i * tableH;
+          if (i % 2 === 1) doc.rect(pad, rowY, tableW, tableH).fill("#f7faff");
+          const isBold = label.includes("Total") || label.includes("Late");
+          doc
+            .fillColor(isBold ? "#1a56a0" : "#222222")
+            .font(isBold ? "Helvetica-Bold" : "Helvetica")
+            .fontSize(7)
+            .text(label, cols.label + 4, rowY + 4, { width: 200 })
+            .text(amount, cols.amount - 10, rowY + 4, {
+              width: 80,
+              align: "right",
+            });
+        });
+
+        // Status badge
+        const statusColor =
+          currentStatus === "Paid"
+            ? "#1a8c5b"
+            : currentStatus === "Partial"
+              ? "#c47a00"
+              : "#c0392b";
+        doc.rect(pad, tableY + tableH * 5 + 4, 60, 14).fill(statusColor);
+        doc
+          .fillColor("#ffffff")
+          .font("Helvetica-Bold")
+          .fontSize(7)
+          .text(
+            `STATUS: ${currentStatus.toUpperCase()}`,
+            pad + 2,
+            tableY + tableH * 5 + 8,
+            { width: 58, align: "center" },
+          );
+
+        // Bank details
+        doc
+          .fillColor("#555555")
+          .font("Helvetica")
+          .fontSize(6.5)
+          .text(`Bank: ${bankDetails}`, rightX, tableY + tableH * 5 + 6, {
+            width: innerW / 2,
+          });
+
+        // Divider between copies
+        if (idx < 2) {
+          doc.save();
+          doc.dash(4, { space: 3 });
+          doc
+            .moveTo(0, (idx + 1) * copyH)
+            .lineTo(pageW, (idx + 1) * copyH)
+            .strokeColor("#aaaaaa")
+            .lineWidth(0.7)
+            .stroke();
+          doc.restore();
+          // Scissors icon
+          doc
+            .fillColor("#aaaaaa")
+            .font("Helvetica")
+            .fontSize(8)
+            .text("✂", pageW / 2 - 4, (idx + 1) * copyH - 6);
+        }
       });
 
-      // Status badge
-      const statusColor = currentStatus === "Paid" ? "#1a8c5b" : currentStatus === "Partial" ? "#c47a00" : "#c0392b";
-      doc.rect(pad, tableY + tableH * 5 + 4, 60, 14).fill(statusColor);
-      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
-        .text(`STATUS: ${currentStatus.toUpperCase()}`, pad + 2, tableY + tableH * 5 + 8, { width: 58, align: "center" });
-
-      // Bank details
-      doc.fillColor("#555555").font("Helvetica").fontSize(6.5)
-        .text(`Bank: ${bankDetails}`, rightX, tableY + tableH * 5 + 6, { width: innerW / 2 });
-
-      // Divider between copies
-      if (idx < 2) {
-        doc.save();
-        doc.dash(4, { space: 3 });
-        doc.moveTo(0, (idx + 1) * copyH).lineTo(pageW, (idx + 1) * copyH).strokeColor("#aaaaaa").lineWidth(0.7).stroke();
-        doc.restore();
-        // Scissors icon
-        doc.fillColor("#aaaaaa").font("Helvetica").fontSize(8)
-          .text("✂", pageW / 2 - 4, (idx + 1) * copyH - 6);
+      doc.end();
+    } catch (error) {
+      console.error("Challan PDF error:", error);
+      if (!res.headersSent) {
+        res
+          .status(500)
+          .json({ success: false, message: "Failed to generate PDF" });
       }
-    });
-
-    doc.end();
-  } catch (error) {
-    console.error("Challan PDF error:", error);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, message: "Failed to generate PDF" });
     }
-  }
-});
+  },
+);
 
 // ==================== CLASS SECTIONS ROUTES ====================
 app.post("/api/classes/:id/sections", authenticate, async (req, res) => {
@@ -1785,45 +2311,47 @@ app.post("/api/classes/:id/sections", authenticate, async (req, res) => {
   }
 });
 
-app.delete("/api/classes/:id/sections/:section", authenticate, async (req, res) => {
-  try {
-    const classDoc = await Class.findOne({ id: req.params.id });
-    if (!classDoc)
-      return res
-        .status(404)
-        .json({ success: false, message: "Class not found" });
+app.delete(
+  "/api/classes/:id/sections/:section",
+  authenticate,
+  async (req, res) => {
+    try {
+      const classDoc = await Class.findOne({ id: req.params.id });
+      if (!classDoc)
+        return res
+          .status(404)
+          .json({ success: false, message: "Class not found" });
 
-    const studentCount = await Student.countDocuments({
-      classId: classDoc.id,
-      campusId: classDoc.campusId,
-      section: req.params.section,
-      active: true,
-    });
+      const studentCount = await Student.countDocuments({
+        classId: classDoc.id,
+        campusId: classDoc.campusId,
+        section: req.params.section,
+        active: true,
+      });
 
-    if (studentCount > 0) {
-      return res
-        .status(400)
-        .json({
+      if (studentCount > 0) {
+        return res.status(400).json({
           success: false,
           message: `Cannot remove section with ${studentCount} students`,
         });
-    }
+      }
 
-    classDoc.sections = classDoc.sections.filter(
-      (s) => s !== req.params.section,
-    );
-    await classDoc.save();
-    res.json({
-      success: true,
-      message: "Section removed successfully",
-      data: classDoc,
-    });
-  } catch (error) {
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to remove section" });
-  }
-});
+      classDoc.sections = classDoc.sections.filter(
+        (s) => s !== req.params.section,
+      );
+      await classDoc.save();
+      res.json({
+        success: true,
+        message: "Section removed successfully",
+        data: classDoc,
+      });
+    } catch (error) {
+      res
+        .status(500)
+        .json({ success: false, message: "Failed to remove section" });
+    }
+  },
+);
 
 // ==================== SERVER START ====================
 if (process.env.NODE_ENV !== "production") {
