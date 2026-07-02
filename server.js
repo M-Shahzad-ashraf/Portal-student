@@ -33,44 +33,47 @@ const MONGODB_URI =
 
 // ==================== DEFAULT ADMIN ====================
 async function ensureDefaultAdmin() {
-  let admin = await User.findOne({ username: "admin", role: "admin" });
-  if (!admin) {
-    admin = await User.findOne({ role: "admin" });
-  }
+  let admin = await User.findOne({ role: "admin" });
 
   if (!admin) {
-    admin = new User({
+    admin = await User.create({
       username: "admin",
       password: "admin123",
       role: "admin",
     });
-    await admin.save();
-    console.log(
-      "✅ Default admin user created (username: admin, password: admin123)",
-    );
-    return admin;
+
+    console.log("✅ Default admin created");
+    return;
   }
 
-  // Fix admin saved without bcrypt hashing
-  if (admin.password && !admin.password.startsWith("$2")) {
+  if (!admin.password.startsWith("$2")) {
     admin.password = "admin123";
     await admin.save();
-    console.log("✅ Admin password fixed (re-hashed)");
+
+    console.log("✅ Admin password rehashed");
+  }
+}
+// ==================== SEED FUNCTIONS ====================
+async function seedDefaultClasses() {
+  const classesCount = await Class.countDocuments();
+
+  if (classesCount > 0) {
+    console.log("✅ Classes already exist");
+    return;
   }
 
-  return admin;
-}
+  await Class.insertMany(defaultClasses);
 
+  console.log("✅ Default classes inserted");
+}
 mongoose
   .connect(MONGODB_URI)
   .then(async () => {
     console.log("✅ MongoDB Connected successfully");
 
     try {
-      // Create default admin
       await ensureDefaultAdmin();
 
-      // Seed default classes
       const classesCount = await Class.countDocuments();
 
       if (classesCount === 0) {
@@ -78,217 +81,24 @@ mongoose
         console.log("✅ Default classes created");
       }
 
-      console.log("🎉 Server ready to use!");
-
-      // Start Server
-      const PORT = process.env.PORT || 5000;
-
-      app.listen(PORT, () => {
-        console.log(`🚀 Server running on port ${PORT}`);
-      });
-
     } catch (error) {
       console.error("❌ Startup Error:", error);
     }
+
+    // Server hamesha start hoga
+    const PORT = process.env.PORT || 5000;
+
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log("🎉 Server ready to use!");
+    });
   })
   .catch((err) => {
-    console.error("❌ MongoDB Connection Error:", err);
-
-    console.log("\n💡 Troubleshooting:");
-    console.log("1. Check MONGODB_URI");
-    console.log("2. Check MongoDB Atlas username/password");
-    console.log("3. Check Network Access (0.0.0.0/0)");
-    console.log("4. Check Environment Variables");
+    console.error("❌ MongoDB Connection Error");
+    console.error(err);
   });
 
-// ==================== SEED FUNCTIONS ====================
-async function seedDefaultClasses() {
-  const defaultClasses = [
-    // Boys Campus
-    {
-      id: "b1",
-      campusId: "boys",
-      name: "Class 1",
-      sections: ["A", "B", "C"],
-      order: 1,
-    },
-    {
-      id: "b2",
-      campusId: "boys",
-      name: "Class 2",
-      sections: ["A", "B", "C"],
-      order: 2,
-    },
-    {
-      id: "b3",
-      campusId: "boys",
-      name: "Class 3",
-      sections: ["A", "B"],
-      order: 3,
-    },
-    {
-      id: "b4",
-      campusId: "boys",
-      name: "Class 4",
-      sections: ["A", "B"],
-      order: 4,
-    },
-    {
-      id: "b5",
-      campusId: "boys",
-      name: "Class 5",
-      sections: ["A", "B", "C"],
-      order: 5,
-    },
-    {
-      id: "b6",
-      campusId: "boys",
-      name: "Class 6",
-      sections: ["A", "B"],
-      order: 6,
-    },
-    {
-      id: "b7",
-      campusId: "boys",
-      name: "Class 7",
-      sections: ["A", "B"],
-      order: 7,
-    },
-    {
-      id: "b8",
-      campusId: "boys",
-      name: "Class 8",
-      sections: ["A", "B"],
-      order: 8,
-    },
-    {
-      id: "b9",
-      campusId: "boys",
-      name: "Class 9",
-      sections: ["A", "B"],
-      order: 9,
-    },
-    {
-      id: "b10",
-      campusId: "boys",
-      name: "Class 10",
-      sections: ["A", "B", "C"],
-      order: 10,
-    },
-    // Girls Campus
-    {
-      id: "g1",
-      campusId: "girls",
-      name: "Class 1",
-      sections: ["A", "B"],
-      order: 1,
-    },
-    {
-      id: "g2",
-      campusId: "girls",
-      name: "Class 2",
-      sections: ["A", "B"],
-      order: 2,
-    },
-    {
-      id: "g3",
-      campusId: "girls",
-      name: "Class 3",
-      sections: ["A", "B"],
-      order: 3,
-    },
-    {
-      id: "g4",
-      campusId: "girls",
-      name: "Class 4",
-      sections: ["A", "B"],
-      order: 4,
-    },
-    {
-      id: "g5",
-      campusId: "girls",
-      name: "Class 5",
-      sections: ["A", "B"],
-      order: 5,
-    },
-    {
-      id: "g6",
-      campusId: "girls",
-      name: "Class 6",
-      sections: ["A", "B"],
-      order: 6,
-    },
-    {
-      id: "g7",
-      campusId: "girls",
-      name: "Class 7",
-      sections: ["A", "B"],
-      order: 7,
-    },
-    {
-      id: "g8",
-      campusId: "girls",
-      name: "Class 8",
-      sections: ["A", "B"],
-      order: 8,
-    },
-    {
-      id: "g9",
-      campusId: "girls",
-      name: "Class 9",
-      sections: ["A", "B"],
-      order: 9,
-    },
-    {
-      id: "g10",
-      campusId: "girls",
-      name: "Class 10",
-      sections: ["A", "B"],
-      order: 10,
-    },
-    // Kids Campus
-    {
-      id: "k1",
-      campusId: "kids",
-      name: "Nursery",
-      sections: ["A", "B"],
-      order: 1,
-    },
-    {
-      id: "k2",
-      campusId: "kids",
-      name: "Prep",
-      sections: ["A", "B"],
-      order: 2,
-    },
-    {
-      id: "k3",
-      campusId: "kids",
-      name: "Class 1",
-      sections: ["A", "B"],
-      order: 3,
-    },
-    {
-      id: "k4",
-      campusId: "kids",
-      name: "Class 2",
-      sections: ["A", "B"],
-      order: 4,
-    },
-    {
-      id: "k5",
-      campusId: "kids",
-      name: "Class 3",
-      sections: ["A", "B"],
-      order: 5,
-    },
-  ];
 
-  for (const cls of defaultClasses) {
-    const classDoc = new Class(cls);
-    await classDoc.save();
-  }
-}
 
 async function seedSampleStudents() {
   const classes = await Class.find();
