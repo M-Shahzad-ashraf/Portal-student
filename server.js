@@ -66,33 +66,39 @@ mongoose
   .then(async () => {
     console.log("✅ MongoDB Connected successfully");
 
-    await ensureDefaultAdmin();
+    try {
+      // Create default admin
+      await ensureDefaultAdmin();
 
-    // Check if classes exist, if not create default classes
-    const classesCount = await Class.countDocuments();
-    if (classesCount === 0) {
-      await seedDefaultClasses();
-      console.log("✅ Default classes created");
+      // Seed default classes
+      const classesCount = await Class.countDocuments();
+
+      if (classesCount === 0) {
+        await seedDefaultClasses();
+        console.log("✅ Default classes created");
+      }
+
+      console.log("🎉 Server ready to use!");
+
+      // Start Server
+      const PORT = process.env.PORT || 5000;
+
+      app.listen(PORT, () => {
+        console.log(`🚀 Server running on port ${PORT}`);
+      });
+
+    } catch (error) {
+      console.error("❌ Startup Error:", error);
     }
-
-    // Auto-seeding students is DISABLED - students are added manually only
-    // const studentsCount = await Student.countDocuments();
-    // if (studentsCount === 0) {
-    //   await seedSampleStudents();
-    //   console.log('✅ Sample students created');
-    // }
-
-    console.log("🎉 Server ready to use!");
   })
   .catch((err) => {
-    console.error("❌ MongoDB Connection error:", err.message);
+    console.error("❌ MongoDB Connection Error:", err);
+
     console.log("\n💡 Troubleshooting:");
-    console.log("   1. Make sure MongoDB is installed");
-    console.log("   2. Start MongoDB:");
-    console.log("      - Windows: net start MongoDB");
-    console.log("      - Mac: brew services start mongodb-community");
-    console.log("      - Linux: sudo systemctl start mongod");
-    console.log("   3. Or use MongoDB Atlas (cloud)");
+    console.log("1. Check MONGODB_URI");
+    console.log("2. Check MongoDB Atlas username/password");
+    console.log("3. Check Network Access (0.0.0.0/0)");
+    console.log("4. Check Environment Variables");
   });
 
 // ==================== SEED FUNCTIONS ====================
@@ -2010,4 +2016,13 @@ app.delete("/api/classes/:id/sections/:section", authenticate, async (req, res) 
 });
 
 // ==================== SERVER START ====================
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 5000;
 
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📊 MongoDB Connected`);
+  });
+}
+
+module.exports = app;
