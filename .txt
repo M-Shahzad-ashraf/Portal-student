@@ -1,0 +1,27 @@
+mmhs-backend/
+├── server.js
+├── package.json
+├── .env
+├── config/
+│   └── database.js
+├── models/
+│   ├── User.js
+│   ├── Student.js
+│   └── Class.js
+├── routes/
+│   ├── auth.js
+│   ├── students.js
+│   ├── classes.js
+│   ├── fees.js
+│   └── dashboard.js
+├── middleware/
+│   ├── auth.js
+│   └── validation.js
+├── controllers/
+│   ├── authController.js
+│   ├── studentController.js
+│   ├── classController.js
+│   ├── feeController.js
+│   └── dashboardController.js
+└── utils/
+    └── helpers.js
