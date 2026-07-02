@@ -29,7 +29,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // ==================== MONGODB CONNECTION ====================
 const MONGODB_URI =
-  process.env.MONGODB_URI || "mongodb://localhost:27017/mmhs_db";
+  process.env.MONGODB_URI;
 
 // ==================== DEFAULT ADMIN ====================
 async function ensureDefaultAdmin() {
@@ -93,7 +93,6 @@ mongoose
     console.log("      - Mac: brew services start mongodb-community");
     console.log("      - Linux: sudo systemctl start mongod");
     console.log("   3. Or use MongoDB Atlas (cloud)");
-    process.exit(1);
   });
 
 // ==================== SEED FUNCTIONS ====================
