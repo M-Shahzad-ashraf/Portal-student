@@ -909,13 +909,11 @@ app.post(
       });
     } catch (error) {
       console.error("Import error:", error);
-      res
-        .status(500)
-        .json({
-          success: false,
-          message: "Import failed",
-          error: error.message,
-        });
+      res.status(500).json({
+        success: false,
+        message: "Import failed",
+        error: error.message,
+      });
     }
   },
 );
@@ -2044,10 +2042,10 @@ app.get(
 
       const campusLabel =
         student.campusId === "boys"
-          ? "Boys Campus"
+          ? "Bader Colony Campus"
           : student.campusId === "girls"
-            ? "Girls Campus"
-            : "Kids Campus";
+            ? "Bilal Colony Campus"
+            : "Abbas Park Campus";
 
       // --- PDF Generation (A4, 3-copy family style) ---
       const doc = new PDFDocument({ size: "A4", margin: 0 });
