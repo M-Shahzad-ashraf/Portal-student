@@ -30,23 +30,25 @@ const getStudentFeeSummary = async (req, res) => {
     const currentMonthIndex = new Date().getMonth();
 
     let totalPaid = 0;
-    let totalDue = 0;
+    let expectedTotal = 0;
     const monthlyBreakdown = [];
 
-    for (let i = 0; i < months.length; i++) {
+    for (let i = 0; i <= currentMonthIndex; i++) {
       const month = months[i];
       const record = student.feeRecords.find(
         (r) => r.month === month && r.year === 2026,
       );
+      const amount = record?.amount || student.monthlyFee || 0;
+      expectedTotal += amount;
 
       if (record) {
         if (record.status === "Paid") {
-          totalPaid += record.amount;
+          totalPaid += amount;
           monthlyBreakdown.push({
             month,
             status: "Paid",
-            amount: record.amount,
-            paidAmount: record.amount,
+            amount,
+            paidAmount: amount,
             paidDate: record.paidDate,
             receipt: record.receipt,
           });
@@ -56,23 +58,21 @@ const getStudentFeeSummary = async (req, res) => {
           monthlyBreakdown.push({
             month,
             status: "Partial",
-            amount: record.amount,
+            amount,
             paidAmount: paid,
-            remaining: record.amount - paid,
+            remaining: Math.max(0, amount - paid),
             paidDate: record.paidDate,
             receipt: record.receipt,
           });
         } else {
-          totalDue += record.amount;
           monthlyBreakdown.push({
             month,
             status: "Unpaid",
-            amount: record.amount,
+            amount,
             paidAmount: 0,
           });
         }
       } else {
-        totalDue += student.monthlyFee;
         monthlyBreakdown.push({
           month,
           status: "Unpaid",
@@ -89,8 +89,9 @@ const getStudentFeeSummary = async (req, res) => {
         studentName: student.name,
         monthlyFee: student.monthlyFee,
         totalPaid,
-        totalDue,
-        outstanding: Math.max(0, totalDue - totalPaid),
+        totalDue: Math.max(0, expectedTotal - totalPaid),
+        expectedTotal,
+        outstanding: Math.max(0, expectedTotal - totalPaid),
         monthlyBreakdown,
       },
     });
@@ -220,7 +221,12 @@ const getFeeOverview = async (req, res) => {
       }
     });
 
-    const expectedTotal = totalStudents * 2000;
+    const expectedTotal = students.reduce((sum, student) => {
+      const feeRecord = student.feeRecords.find(
+        (r) => r.month === month && r.year === parseInt(year),
+      );
+      return sum + (feeRecord?.amount || student.monthlyFee || 0);
+    }, 0);
 
     res.json({
       success: true,

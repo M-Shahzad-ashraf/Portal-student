@@ -50,13 +50,29 @@ studentSchema.pre("save", async function () {
 studentSchema.pre("save", async function () {
   if (!this.rollNo && this.isNew) {
     const Student = mongoose.model("Student");
-    const count = await Student.countDocuments({
-      campusId: this.campusId,
-      classId: this.classId,
-      section: this.section,
-    });
     const campusCode = this.campusId.charAt(0).toUpperCase();
-    this.rollNo = `${campusCode}${this.classId}${this.section}${String(count + 1).padStart(2, "0")}`;
+    const prefix = `${campusCode}${this.classId}${this.section}`;
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const existingStudents = await Student.find({
+      rollNo: { $regex: `^${escapedPrefix}\\d+$` },
+    })
+      .select("rollNo")
+      .lean();
+
+    let maxRoll = 0;
+    existingStudents.forEach((student) => {
+      const suffix = student.rollNo.slice(prefix.length);
+      const number = parseInt(suffix, 10);
+      if (!Number.isNaN(number)) maxRoll = Math.max(maxRoll, number);
+    });
+
+    let nextRoll = maxRoll + 1;
+    this.rollNo = `${prefix}${String(nextRoll).padStart(2, "0")}`;
+
+    while (await Student.exists({ rollNo: this.rollNo })) {
+      nextRoll++;
+      this.rollNo = `${prefix}${String(nextRoll).padStart(2, "0")}`;
+    }
   }
 });
 

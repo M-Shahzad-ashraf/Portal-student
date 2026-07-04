@@ -2,15 +2,20 @@ const crypto = require("crypto");
 
 // Generate unique student ID
 const generateStudentId = async (StudentModel) => {
-  const lastStudent = await StudentModel.findOne().sort({ id: -1 });
-  let lastNum = 1000;
+  const students = await StudentModel.find({ id: /^S\d+$/ }).select("id").lean();
+  let nextNum =
+    students.reduce((max, student) => {
+      const match = student.id.match(/^S(\d+)$/);
+      return match ? Math.max(max, parseInt(match[1], 10)) : max;
+    }, 1000) + 1;
 
-  if (lastStudent && lastStudent.id) {
-    const match = lastStudent.id.match(/S(\d+)/);
-    if (match) lastNum = parseInt(match[1]);
+  let studentId = `S${nextNum}`;
+  while (await StudentModel.exists({ id: studentId })) {
+    nextNum++;
+    studentId = `S${nextNum}`;
   }
 
-  return `S${lastNum + 1}`;
+  return studentId;
 };
 
 // Generate class ID
@@ -64,23 +69,25 @@ const calculateFeeSummary = (feeRecords, monthlyFee) => {
   const currentMonth = new Date().getMonth();
 
   let totalPaid = 0;
-  let totalDue = 0;
+  let expectedTotal = 0;
 
   for (let i = 0; i <= currentMonth; i++) {
     const record = feeRecords.find((r) => r.month === months[i]);
+    const amount = record?.amount || monthlyFee || 0;
+    expectedTotal += amount;
     if (record) {
-      if (record.status === "Paid") totalPaid += record.amount;
-      else if (record.status === "Partial") totalPaid += record.paidAmount || 0;
-      else totalDue += monthlyFee;
-    } else {
-      totalDue += monthlyFee;
+      if (record.status === "Paid") totalPaid += amount;
+      else if (record.status === "Partial") {
+        totalPaid += Math.min(record.paidAmount || 0, amount);
+      }
     }
   }
 
   return {
     totalPaid,
-    totalDue,
-    outstanding: Math.max(0, totalDue - totalPaid),
+    totalDue: Math.max(0, expectedTotal - totalPaid),
+    expectedTotal,
+    outstanding: Math.max(0, expectedTotal - totalPaid),
   };
 };
 

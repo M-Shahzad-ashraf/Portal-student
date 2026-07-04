@@ -799,11 +799,12 @@ app.post(
       }
 
       const results = { created: 0, skipped: 0, errors: [] };
+      let nextStudentIdNumber = await getNextStudentIdNumber();
 
       for (const row of rows) {
         try {
-          const name = row["Name"] || row["name"];
-          const fatherName = row["Father Name"] || row["fatherName"];
+      const name = String(row["Name"] || row["name"] || "").trim();
+      const fatherName = String(row["Father Name"] || row["fatherName"] || "").trim();
           const campusId = (
             row["Campus"] ||
             row["campusId"] ||
@@ -824,22 +825,11 @@ app.post(
             continue;
           }
 
-          // Generate student ID
-          const lastStudent = await Student.findOne().sort({ createdAt: -1 });
-          let lastNum = 1000;
-          if (lastStudent?.id) {
-            const match = lastStudent.id.match(/S(\d+)/);
-            if (match) lastNum = parseInt(match[1]);
+          let studentId = `S${nextStudentIdNumber++}`;
+          while (await Student.exists({ id: studentId })) {
+            studentId = `S${nextStudentIdNumber++}`;
           }
-          const studentId = `S${lastNum + 1}`;
-
-          const studentCount = await Student.countDocuments({
-            campusId,
-            classId,
-            section,
-            active: true,
-          });
-          const rollNo = `${campusId.charAt(0).toUpperCase()}${classId}${section}${String(studentCount + 1).padStart(2, "0")}`;
+          const rollNo = await generateUniqueRollNo(campusId, classId, section);
 
           const monthlyFee =
             parseInt(row["Monthly Fee"] || row["monthlyFee"]) || 2000;
@@ -1019,16 +1009,9 @@ app.post("/api/students", authenticate, async (req, res) => {
       });
     }
 
-    let studentId = id;
+    let studentId = String(id || "").trim();
     if (!studentId) {
-      // Generate unique student ID
-      const lastStudent = await Student.findOne().sort({ id: -1 });
-      let lastNum = 1000;
-      if (lastStudent && lastStudent.id) {
-        const match = lastStudent.id.match(/S(\d+)/);
-        if (match) lastNum = parseInt(match[1]);
-      }
-      studentId = `S${lastNum + 1}`;
+      studentId = await generateUniqueStudentId();
     } else {
       // Check if exists
       const existingStudent = await Student.findOne({ id: studentId });
@@ -1040,14 +1023,8 @@ app.post("/api/students", authenticate, async (req, res) => {
       }
     }
 
-    // Generate roll number
-    const studentCount = await Student.countDocuments({
-      campusId,
-      classId,
-      section,
-      active: true,
-    });
-    const rollNo = `${campusId.charAt(0).toUpperCase()}${classId}${section}${String(studentCount + 1).padStart(2, "0")}`;
+    const normalizedSection = section.toUpperCase();
+    const rollNo = await generateUniqueRollNo(campusId, classId, normalizedSection);
 
     // Create fee records for academic year (March - February)
     const academicMonths = [
@@ -1086,7 +1063,7 @@ app.post("/api/students", authenticate, async (req, res) => {
       campusId,
       classId,
       className,
-      section: section.toUpperCase(),
+      section: normalizedSection,
       rollNo,
       gender: gender || (campusId === "girls" ? "F" : "M"),
       dob: dob || null,
@@ -1112,6 +1089,13 @@ app.post("/api/students", authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error("Add student error:", error);
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern || {})[0] || "record";
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate ${field}. Please try again.`,
+      });
+    }
     res.status(500).json({
       success: false,
       message: "Failed to add student",
@@ -1355,6 +1339,56 @@ const getFeeYearForMonth = (
 
 const getCurrentMonthName = () => CALENDAR_MONTHS[new Date().getMonth()];
 
+const getNextStudentIdNumber = async () => {
+  const students = await Student.find({ id: /^S\d+$/ }).select("id").lean();
+  return students.reduce((max, student) => {
+    const match = student.id.match(/^S(\d+)$/);
+    return match ? Math.max(max, parseInt(match[1], 10)) : max;
+  }, 1000) + 1;
+};
+
+const generateUniqueStudentId = async () => {
+  let nextNumber = await getNextStudentIdNumber();
+  let studentId = `S${nextNumber}`;
+
+  while (await Student.exists({ id: studentId })) {
+    nextNumber++;
+    studentId = `S${nextNumber}`;
+  }
+
+  return studentId;
+};
+
+const escapeRegex = (value) =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const generateUniqueRollNo = async (campusId, classId, section) => {
+  const normalizedSection = String(section || "").toUpperCase();
+  const prefix = `${campusId.charAt(0).toUpperCase()}${classId}${normalizedSection}`;
+  const existingStudents = await Student.find({
+    rollNo: { $regex: `^${escapeRegex(prefix)}\\d+$` },
+  })
+    .select("rollNo")
+    .lean();
+
+  let maxRoll = 0;
+  existingStudents.forEach((student) => {
+    const suffix = student.rollNo.slice(prefix.length);
+    const number = parseInt(suffix, 10);
+    if (!Number.isNaN(number)) maxRoll = Math.max(maxRoll, number);
+  });
+
+  let nextRoll = maxRoll + 1;
+  let rollNo = `${prefix}${String(nextRoll).padStart(2, "0")}`;
+
+  while (await Student.exists({ rollNo })) {
+    nextRoll++;
+    rollNo = `${prefix}${String(nextRoll).padStart(2, "0")}`;
+  }
+
+  return rollNo;
+};
+
 const buildMonthlyRecordsMap = (
   feeRecords,
   academicStartYear = getAcademicYearStart(),
@@ -1382,15 +1416,18 @@ app.get("/api/fees/overview", authenticate, async (req, res) => {
     let paid = 0,
       partial = 0,
       unpaid = 0,
-      totalCollected = 0;
+      totalCollected = 0,
+      expectedTotal = 0;
     students.forEach((student) => {
       const record = student.feeRecords.find(
         (r) => r.month === month && r.year === feeYear,
       );
+      const expectedAmount = record?.amount || student.monthlyFee || 0;
+      expectedTotal += expectedAmount;
       if (record) {
         if (record.status === "Paid") {
           paid++;
-          totalCollected += record.amount;
+          totalCollected += record.amount || expectedAmount;
         } else if (record.status === "Partial") {
           partial++;
           totalCollected += record.paidAmount || 0;
@@ -1412,10 +1449,10 @@ app.get("/api/fees/overview", authenticate, async (req, res) => {
         partial,
         unpaid,
         totalCollected,
-        expectedTotal: students.length * 2000,
+        expectedTotal,
         collectionRate:
-          students.length > 0
-            ? ((totalCollected / (students.length * 2000)) * 100).toFixed(2)
+          expectedTotal > 0
+            ? ((totalCollected / expectedTotal) * 100).toFixed(2)
             : 0,
       },
     });
@@ -1451,7 +1488,11 @@ app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
         fatherPhone: student.fatherPhone,
         monthlyFee: student.monthlyFee,
         feeStatus: feeRecord ? feeRecord.status : "Unpaid",
-        paidAmount: feeRecord?.paidAmount || 0,
+        paidAmount:
+          feeRecord?.status === "Paid"
+            ? feeRecord.amount || student.monthlyFee || 0
+            : feeRecord?.paidAmount || 0,
+        amount: feeRecord?.amount || student.monthlyFee || 0,
         paidDate: feeRecord?.paidDate,
         receipt: feeRecord?.receipt,
       };
@@ -1493,18 +1534,22 @@ app.get(
         academicStartYear,
       );
 
-      const totalPaid = student.feeRecords.reduce((sum, r) => {
-        if (r.status === "Paid") return sum + r.amount;
-        if (r.status === "Partial") return sum + (r.paidAmount || 0);
-        return sum;
-      }, 0);
-
-      let monthsPassed = 0;
+      let expectedTotal = 0;
+      let totalPaid = 0;
       for (const month of ACADEMIC_FEE_MONTHS) {
-        monthsPassed++;
+        const year = getFeeYearForMonth(month, academicStartYear);
+        const record =
+          student.feeRecords.find((r) => r.month === month && r.year === year) ||
+          student.feeRecords.find((r) => r.month === month);
+        const amount = record?.amount || student.monthlyFee || 0;
+        expectedTotal += amount;
+        if (record?.status === "Paid") totalPaid += amount;
+        else if (record?.status === "Partial") {
+          totalPaid += Math.min(record.paidAmount || 0, amount);
+        }
         if (month === currentMonth) break;
       }
-      const totalDue = monthsPassed * student.monthlyFee;
+      const outstanding = Math.max(0, expectedTotal - totalPaid);
 
       res.json({
         success: true,
@@ -1513,8 +1558,9 @@ app.get(
           studentName: student.name,
           monthlyFee: student.monthlyFee,
           totalPaid,
-          totalDue,
-          outstanding: Math.max(0, totalDue - totalPaid),
+          totalDue: outstanding,
+          expectedTotal,
+          outstanding,
           currentMonth,
           academicYear: `${academicStartYear}-${academicStartYear + 1}`,
           monthlyRecords,
@@ -2042,9 +2088,9 @@ app.get(
 
       const campusLabel =
         student.campusId === "boys"
-          ? "Bader Colony Campus"
+          ? "Badar Colony Campus"
           : student.campusId === "girls"
-            ? "Bilal Colony Campus"
+            ? "Mega Road Campus"
             : "Abbas Park Campus";
 
       // --- PDF Generation (A4, 3-copy family style) ---
