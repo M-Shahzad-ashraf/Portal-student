@@ -344,8 +344,6 @@ const generateChallan = async (req, res) => {
     }
 
     const months = [
-      "January",
-      "February",
       "March",
       "April",
       "May",
@@ -356,6 +354,8 @@ const generateChallan = async (req, res) => {
       "October",
       "November",
       "December",
+      "January",
+      "February",
     ];
     const targetIndex = academicMonths.indexOf(month);
     const calendarMonthIndex = calendarMonths.indexOf(month);
@@ -368,8 +368,7 @@ const generateChallan = async (req, res) => {
       });
     }
 
-    const academicStartYear =
-      calendarMonthIndex < 2 ? yearInt - 1 : yearInt;
+    const academicStartYear = calendarMonthIndex < 2 ? yearInt - 1 : yearInt;
 
     // Calculate arrears for previous months
     let arrears = 0;

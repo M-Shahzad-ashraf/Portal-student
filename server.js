@@ -803,8 +803,10 @@ app.post(
 
       for (const row of rows) {
         try {
-      const name = String(row["Name"] || row["name"] || "").trim();
-      const fatherName = String(row["Father Name"] || row["fatherName"] || "").trim();
+          const name = String(row["Name"] || row["name"] || "").trim();
+          const fatherName = String(
+            row["Father Name"] || row["fatherName"] || "",
+          ).trim();
           const campusId = (
             row["Campus"] ||
             row["campusId"] ||
@@ -1024,7 +1026,11 @@ app.post("/api/students", authenticate, async (req, res) => {
     }
 
     const normalizedSection = section.toUpperCase();
-    const rollNo = await generateUniqueRollNo(campusId, classId, normalizedSection);
+    const rollNo = await generateUniqueRollNo(
+      campusId,
+      classId,
+      normalizedSection,
+    );
 
     // Create fee records for academic year (March - February)
     const academicMonths = [
@@ -1340,11 +1346,15 @@ const getFeeYearForMonth = (
 const getCurrentMonthName = () => CALENDAR_MONTHS[new Date().getMonth()];
 
 const getNextStudentIdNumber = async () => {
-  const students = await Student.find({ id: /^S\d+$/ }).select("id").lean();
-  return students.reduce((max, student) => {
-    const match = student.id.match(/^S(\d+)$/);
-    return match ? Math.max(max, parseInt(match[1], 10)) : max;
-  }, 1000) + 1;
+  const students = await Student.find({ id: /^S\d+$/ })
+    .select("id")
+    .lean();
+  return (
+    students.reduce((max, student) => {
+      const match = student.id.match(/^S(\d+)$/);
+      return match ? Math.max(max, parseInt(match[1], 10)) : max;
+    }, 1000) + 1
+  );
 };
 
 const generateUniqueStudentId = async () => {
@@ -1539,8 +1549,9 @@ app.get(
       for (const month of ACADEMIC_FEE_MONTHS) {
         const year = getFeeYearForMonth(month, academicStartYear);
         const record =
-          student.feeRecords.find((r) => r.month === month && r.year === year) ||
-          student.feeRecords.find((r) => r.month === month);
+          student.feeRecords.find(
+            (r) => r.month === month && r.year === year,
+          ) || student.feeRecords.find((r) => r.month === month);
         const amount = record?.amount || student.monthlyFee || 0;
         expectedTotal += amount;
         if (record?.status === "Paid") totalPaid += amount;
