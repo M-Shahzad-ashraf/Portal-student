@@ -13,7 +13,21 @@ const getStudentFeeSummary = async (req, res) => {
       });
     }
 
-    const months = [
+    const academicMonths = [
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+      "January",
+      "February",
+    ];
+    const calendarMonths = [
       "January",
       "February",
       "March",
@@ -343,21 +357,30 @@ const generateChallan = async (req, res) => {
       "November",
       "December",
     ];
-    const targetIndex = months.indexOf(month);
+    const targetIndex = academicMonths.indexOf(month);
+    const calendarMonthIndex = calendarMonths.indexOf(month);
+    const yearInt = parseInt(year);
 
-    if (targetIndex === -1) {
+    if (targetIndex === -1 || calendarMonthIndex === -1) {
       return res.status(400).json({
         success: false,
         message: "Invalid month",
       });
     }
 
+    const academicStartYear =
+      calendarMonthIndex < 2 ? yearInt - 1 : yearInt;
+
     // Calculate arrears for previous months
     let arrears = 0;
     for (let i = 0; i < targetIndex; i++) {
-      const prevMonth = months[i];
+      const prevMonth = academicMonths[i];
+      const prevYear =
+        prevMonth === "January" || prevMonth === "February"
+          ? academicStartYear + 1
+          : academicStartYear;
       const record = student.feeRecords.find(
-        (r) => r.month === prevMonth && r.year === parseInt(year),
+        (r) => r.month === prevMonth && r.year === prevYear,
       );
 
       if (!record || record.status === "Unpaid") {
@@ -373,9 +396,9 @@ const generateChallan = async (req, res) => {
     const totalWithinDue = currentFee + arrears;
     const totalAfterDue = totalWithinDue + lateSurcharge;
 
-    const challanNo = `CH-${student.id.substring(1)}-${String(targetIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`;
-    const issueDate = `${year}-${String(targetIndex + 1).padStart(2, "0")}-01`;
-    const dueDate = `${year}-${String(targetIndex + 1).padStart(2, "0")}-10`;
+    const challanNo = `CH-${student.id.substring(1)}-${String(calendarMonthIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`;
+    const issueDate = `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-01`;
+    const dueDate = `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-10`;
 
     res.json({
       success: true,
@@ -390,7 +413,7 @@ const generateChallan = async (req, res) => {
           campusId: student.campusId,
         },
         month,
-        year,
+        year: yearInt,
         challanNo,
         issueDate,
         dueDate,
@@ -401,7 +424,7 @@ const generateChallan = async (req, res) => {
         totalAfterDue,
         feeStatus:
           student.feeRecords.find(
-            (r) => r.month === month && r.year === parseInt(year),
+            (r) => r.month === month && r.year === yearInt,
           )?.status || "Unpaid",
       },
     });

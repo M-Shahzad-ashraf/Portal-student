@@ -1651,26 +1651,26 @@ app.get(
           .json({ success: false, message: "Student not found" });
       }
 
-      const months = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-      ];
-      const targetIndex = months.indexOf(month);
+      const targetIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
+      const calendarMonthIndex = CALENDAR_MONTHS.indexOf(month);
+      const yearInt = parseInt(year);
+
+      if (targetIndex === -1 || calendarMonthIndex === -1) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid month" });
+      }
+
+      const academicStartYear = getAcademicYearStart(
+        new Date(yearInt, calendarMonthIndex, 1),
+      );
 
       let arrears = 0;
       for (let i = 0; i < targetIndex; i++) {
+        const arrearMonth = ACADEMIC_FEE_MONTHS[i];
+        const arrearYear = getFeeYearForMonth(arrearMonth, academicStartYear);
         const record = student.feeRecords.find(
-          (r) => r.month === months[i] && r.year === parseInt(year),
+          (r) => r.month === arrearMonth && r.year === arrearYear,
         );
         if (!record || record.status === "Unpaid") {
           arrears += student.monthlyFee;
@@ -1692,10 +1692,10 @@ app.get(
             campusId: student.campusId,
           },
           month,
-          year: parseInt(year),
-          challanNo: `CH-${student.id.substring(1)}-${String(targetIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`,
-          issueDate: `${year}-${String(targetIndex + 1).padStart(2, "0")}-01`,
-          dueDate: `${year}-${String(targetIndex + 1).padStart(2, "0")}-10`,
+          year: yearInt,
+          challanNo: `CH-${student.id.substring(1)}-${String(calendarMonthIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`,
+          issueDate: `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-01`,
+          dueDate: `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-10`,
           currentFee: student.monthlyFee,
           arrears,
           totalWithinDue: student.monthlyFee + arrears,
@@ -1703,7 +1703,7 @@ app.get(
           totalAfterDue: student.monthlyFee + arrears + 200,
           feeStatus:
             student.feeRecords.find(
-              (r) => r.month === month && r.year === parseInt(year),
+              (r) => r.month === month && r.year === yearInt,
             )?.status || "Unpaid",
         },
       });
@@ -2049,27 +2049,26 @@ app.get(
       const lateFee = settingsDoc.lateFee || 200;
       const dueDateDay = settingsDoc.dueDateDay || 10;
 
-      const months = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-      ];
-      const targetIndex = months.indexOf(month);
       const yearInt = parseInt(year);
+      const targetIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
+      const calendarMonthIndex = CALENDAR_MONTHS.indexOf(month);
+
+      if (targetIndex === -1 || calendarMonthIndex === -1) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid month" });
+      }
+
+      const academicStartYear = getAcademicYearStart(
+        new Date(yearInt, calendarMonthIndex, 1),
+      );
 
       let arrears = 0;
       for (let i = 0; i < targetIndex; i++) {
+        const arrearMonth = ACADEMIC_FEE_MONTHS[i];
+        const arrearYear = getFeeYearForMonth(arrearMonth, academicStartYear);
         const record = student.feeRecords.find(
-          (r) => r.month === months[i] && r.year === yearInt,
+          (r) => r.month === arrearMonth && r.year === arrearYear,
         );
         if (!record || record.status === "Unpaid")
           arrears += student.monthlyFee;
@@ -2080,8 +2079,8 @@ app.get(
       const currentFee = student.monthlyFee;
       const totalWithinDue = currentFee + arrears;
       const totalAfterDue = totalWithinDue + lateFee;
-      const dueDate = `${year}-${String(targetIndex + 1).padStart(2, "0")}-${String(dueDateDay).padStart(2, "0")}`;
-      const challanNo = `CH-${student.id.substring(1)}-${String(targetIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`;
+      const dueDate = `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-${String(dueDateDay).padStart(2, "0")}`;
+      const challanNo = `CH-${student.id.substring(1)}-${String(calendarMonthIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`;
       const currentStatus =
         student.feeRecords.find((r) => r.month === month && r.year === yearInt)
           ?.status || "Unpaid";
