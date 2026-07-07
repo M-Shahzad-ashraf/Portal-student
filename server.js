@@ -713,9 +713,10 @@ app.get("/api/dashboard/recent", authenticate, async (req, res) => {
 // Export route MUST come before /:id to avoid route conflict
 app.get("/api/students/export", authenticate, async (req, res) => {
   try {
-    const { format = "xlsx", campusId, classId, section } = req.query;
+    const { format = "xlsx", campusId, campus, classId, section } = req.query;
     let query = { active: true };
-    if (campusId) query.campusId = campusId;
+    const finalCampusId = campusId || campus;
+    if (finalCampusId) query.campusId = finalCampusId;
     if (classId) query.classId = classId;
     if (section) query.section = section;
 
@@ -729,20 +730,18 @@ app.get("/api/students/export", authenticate, async (req, res) => {
     const rows = students.map((s, i) => ({
       "#": i + 1,
       "Student ID": s.id,
-      Name: s.name,
+      "Full Name": s.name,
       "Father Name": s.fatherName,
       "Father Phone": s.fatherPhone || "",
-      Campus: s.campusId,
-      "Class ID": s.classId,
+      Campus: getCampusLabel(s.campusId),
+      Class: s.className || s.classId,
       Section: s.section,
       "Roll No": s.rollNo || "",
       Gender: s.gender || "",
       DOB: s.dob ? new Date(s.dob).toISOString().split("T")[0] : "",
-      "Blood Group": s.bloodGroup || "",
-      "Monthly Fee": s.monthlyFee || 2000,
-      "B-Form": s.bForm || "",
-      Email: s.email || "",
+      "B-Form/CNIC": s.bForm || "",
       Address: s.address || "",
+      "Monthly Fee": s.monthlyFee || 2000,
     }));
 
     const wb = XLSX.utils.book_new();
@@ -775,6 +774,121 @@ app.get("/api/students/export", authenticate, async (req, res) => {
   }
 });
 
+const normalizeImportHeader = (header) =>
+  String(header || "")
+    .replace(/^\ufeff/, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const buildImportColumnMap = (headerRow) => {
+  const headers = headerRow.map(normalizeImportHeader);
+  const findCol = (...matchers) => {
+    for (const matcher of matchers) {
+      const idx = headers.findIndex(matcher);
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  };
+
+  return {
+    studentId: findCol(
+      (h) => h === "student id" || h === "studentid",
+      (h) => h === "id",
+    ),
+    name: findCol(
+      (h) => h === "full name" || h === "fullname",
+      (h) =>
+        h.includes("name") && !h.includes("father") && !h.includes("student"),
+    ),
+    fatherName: findCol(
+      (h) => h === "father name" || h === "fathername",
+      (h) => h.includes("father") && h.includes("name"),
+      (h) => h.includes("guardian"),
+    ),
+    fatherPhone: findCol(
+      (h) => h.includes("father") && h.includes("phone"),
+      (h) =>
+        h.includes("phone") || h.includes("mobile") || h.includes("contact"),
+    ),
+    campus: findCol((h) => h === "campus" || h.includes("campus")),
+    class: findCol(
+      (h) => h === "class" || h === "class id" || h === "classid",
+    ),
+    section: findCol((h) => h === "section"),
+    gender: findCol((h) => h === "gender" || h === "sex"),
+    dob: findCol((h) => h === "dob" || h.includes("birth")),
+    monthlyFee: findCol((h) => h.includes("fee") || h.includes("amount")),
+    bForm: findCol(
+      (h) => h.includes("b-form") || h.includes("bform") || h.includes("cnic"),
+    ),
+    address: findCol((h) => h === "address"),
+  };
+};
+
+const CAMPUS_LABELS = {
+  boys: "Badar Colony Campus",
+  girls: "Mega Road Campus",
+  kids: "Abbas Park Campus",
+};
+
+const getCampusLabel = (campusId) =>
+  CAMPUS_LABELS[campusId] || campusId || "";
+
+const resolveImportCampusId = (input) => {
+  const normalized = String(input || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+  const campusLabelToId = {
+    "badar colony campus": "boys",
+    "mega road campus": "girls",
+    "abbas park campus": "kids",
+    "badar colony": "boys",
+    "mega road": "girls",
+    "abbas park": "kids",
+  };
+
+  if (campusLabelToId[normalized]) return campusLabelToId[normalized];
+  if (normalized.includes("badar")) return "boys";
+  if (normalized.includes("mega road") || normalized.includes("mega"))
+    return "girls";
+  if (normalized.includes("abbas")) return "kids";
+  if (["boys", "girls", "kids"].includes(normalized)) return normalized;
+  if (normalized.startsWith("boy")) return "boys";
+  if (normalized.startsWith("girl")) return "girls";
+  if (normalized.startsWith("kid")) return "kids";
+  return "";
+};
+
+const resolveImportClass = async (campusId, classInput) => {
+  const escaped = classInput.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let classDoc = await Class.findOne({
+    campusId,
+    $or: [
+      { name: { $regex: new RegExp(`^${escaped}$`, "i") } },
+      { id: classInput.toLowerCase() },
+    ],
+  });
+
+  if (!classDoc) {
+    const count = await Class.countDocuments({ campusId });
+    const prefix =
+      campusId === "boys" ? "b" : campusId === "girls" ? "g" : "k";
+    classDoc = new Class({
+      id: `${prefix}${count + 1}`,
+      campusId,
+      name: classInput,
+      sections: ["A", "B", "C"],
+      order: count + 1,
+    });
+    await classDoc.save();
+  }
+
+  return classDoc;
+};
+
 // Import students from xlsx/csv
 app.post(
   "/api/students/import",
@@ -790,51 +904,113 @@ app.post(
 
       const wb = XLSX.read(req.file.buffer, { type: "buffer" });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws);
+      const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
-      if (!rows.length) {
+      if (rawRows.length < 2) {
         return res
           .status(400)
-          .json({ success: false, message: "File is empty" });
+          .json({ success: false, message: "File has no data rows" });
+      }
+
+      const colMap = buildImportColumnMap(rawRows[0]);
+      const getCell = (row, key) => {
+        const idx = colMap[key];
+        if (idx === undefined || idx < 0) return "";
+        return String(row[idx] ?? "").trim();
+      };
+
+      const missingColumns = [];
+      if (colMap.name < 0) missingColumns.push("Full Name");
+      if (colMap.fatherName < 0) missingColumns.push("Father Name");
+      if (colMap.campus < 0) missingColumns.push("Campus");
+      if (colMap.class < 0) missingColumns.push("Class");
+      if (colMap.section < 0) missingColumns.push("Section");
+
+      if (missingColumns.length) {
+        return res.status(400).json({
+          success: false,
+          message: `Missing columns: ${missingColumns.join(", ")}. Please download and use the Template.`,
+        });
       }
 
       const results = { created: 0, skipped: 0, errors: [] };
       let nextStudentIdNumber = await getNextStudentIdNumber();
+      const seenIdsInFile = new Set();
 
-      for (const row of rows) {
+      for (let i = 1; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        const rowNum = i + 1;
+
+        if (!row || row.every((cell) => !String(cell ?? "").trim())) {
+          continue;
+        }
+
         try {
-          const name = String(row["Name"] || row["name"] || "").trim();
-          const fatherName = String(
-            row["Father Name"] || row["fatherName"] || "",
-          ).trim();
-          const campusId = (
-            row["Campus"] ||
-            row["campusId"] ||
-            ""
-          ).toLowerCase();
-          const classId = row["Class ID"] || row["classId"];
-          const section = (
-            row["Section"] ||
-            row["section"] ||
-            ""
-          ).toUpperCase();
+          const name = getCell(row, "name");
+          const fatherName = getCell(row, "fatherName");
+          const campusInput = getCell(row, "campus");
+          const campusId = resolveImportCampusId(campusInput);
+          const classInput = getCell(row, "class");
+          const section = getCell(row, "section").toUpperCase();
 
-          if (!name || !fatherName || !campusId || !classId || !section) {
+          if (!name || !fatherName || !campusId || !classInput || !section) {
+            const emptyFields = [];
+            if (!name) emptyFields.push("Full Name");
+            if (!fatherName) emptyFields.push("Father Name");
+            if (!campusId) {
+              emptyFields.push(
+                campusInput
+                  ? `Campus (invalid: "${campusInput}" — use Badar Colony Campus, Mega Road Campus, or Abbas Park Campus)`
+                  : "Campus",
+              );
+            }
+            if (!classInput) emptyFields.push("Class");
+            if (!section) emptyFields.push("Section");
             results.errors.push(
-              `Row skipped — missing required fields: ${JSON.stringify(row)}`,
+              `Row ${rowNum} skipped — empty fields: ${emptyFields.join(", ")}`,
             );
             results.skipped++;
             continue;
           }
 
-          let studentId = `S${nextStudentIdNumber++}`;
-          while (await Student.exists({ id: studentId })) {
+          let studentId = getCell(row, "studentId");
+          if (studentId) {
+            const idKey = studentId.toLowerCase();
+            if (seenIdsInFile.has(idKey)) {
+              results.errors.push(
+                `Row ${rowNum} skipped — Duplicate Student ID "${studentId}" in file: ${name}`,
+              );
+              results.skipped++;
+              continue;
+            }
+            const existingStudent = await Student.findOne({ id: studentId });
+            if (existingStudent) {
+              results.errors.push(
+                `Row ${rowNum} skipped — Student ID "${studentId}" already exists: ${name}`,
+              );
+              results.skipped++;
+              continue;
+            }
+            seenIdsInFile.add(idKey);
+          } else {
             studentId = `S${nextStudentIdNumber++}`;
+            while (
+              (await Student.exists({ id: studentId })) ||
+              seenIdsInFile.has(studentId.toLowerCase())
+            ) {
+              studentId = `S${nextStudentIdNumber++}`;
+            }
+            seenIdsInFile.add(studentId.toLowerCase());
           }
-          const rollNo = await generateUniqueRollNo(campusId, classId, section);
 
-          const monthlyFee =
-            parseInt(row["Monthly Fee"] || row["monthlyFee"]) || 2000;
+          const classDoc = await resolveImportClass(campusId, classInput);
+          const rollNo = await generateUniqueRollNo(
+            campusId,
+            classDoc.id,
+            section,
+          );
+
+          const monthlyFee = parseInt(getCell(row, "monthlyFee")) || 2000;
           const now = new Date();
           const academicStartYear =
             now.getMonth() < 2 ? now.getFullYear() - 1 : now.getFullYear();
@@ -862,25 +1038,30 @@ app.post(
             amount: monthlyFee,
           }));
 
+          const genderInput = getCell(row, "gender").toUpperCase();
+          const gender = genderInput.startsWith("M")
+            ? "M"
+            : genderInput.startsWith("F")
+              ? "F"
+              : campusId === "girls"
+                ? "F"
+                : "M";
+
           const student = new Student({
             id: studentId,
             name,
             fatherName,
-            fatherPhone: row["Father Phone"] || row["fatherPhone"] || "",
+            fatherPhone: getCell(row, "fatherPhone"),
             campusId,
-            classId,
+            classId: classDoc.id,
+            className: classDoc.name,
             section,
             rollNo,
-            gender:
-              row["Gender"] ||
-              row["gender"] ||
-              (campusId === "girls" ? "F" : "M"),
-            dob: row["DOB"] || row["dob"] || null,
-            bloodGroup: row["Blood Group"] || row["bloodGroup"] || "",
+            gender,
+            dob: getCell(row, "dob") || null,
             monthlyFee,
-            bForm: row["B-Form"] || row["bForm"] || "",
-            email: row["Email"] || row["email"] || "",
-            address: row["Address"] || row["address"] || "",
+            bForm: getCell(row, "bForm"),
+            address: getCell(row, "address"),
             feeRecords,
             admissionDate: new Date(),
             active: true,
@@ -889,7 +1070,13 @@ app.post(
           await student.save();
           results.created++;
         } catch (rowErr) {
-          results.errors.push(`Row error: ${rowErr.message}`);
+          if (rowErr.code === 11000) {
+            results.errors.push(
+              `Row ${rowNum} skipped — Duplicate Student ID in database`,
+            );
+          } else {
+            results.errors.push(`Row ${rowNum} error: ${rowErr.message}`);
+          }
           results.skipped++;
         }
       }
@@ -1343,6 +1530,120 @@ const getFeeYearForMonth = (
   return academicStartYear;
 };
 
+const formatChallanDate = (date = new Date()) => {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
+const getFeeRecordDetails = (student, feeMonth, feeYear) => {
+  const record = student.feeRecords.find(
+    (r) => r.month === feeMonth && r.year === feeYear,
+  );
+  const amount = record?.amount ?? student.monthlyFee;
+  const status = record?.status || "Unpaid";
+  let due = 0;
+
+  if (status === "Paid") {
+    due = 0;
+  } else if (status === "Partial") {
+    due = Math.max(0, amount - (record?.paidAmount || 0));
+  } else {
+    due = amount;
+  }
+
+  return { record, amount, status, due };
+};
+
+const buildChallanFeeBreakdown = (student, month, yearInt) => {
+  const targetIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
+  const calendarMonthIndex = CALENDAR_MONTHS.indexOf(month);
+
+  if (targetIndex === -1 || calendarMonthIndex === -1) {
+    return null;
+  }
+
+  const academicStartYear = getAcademicYearStart(
+    new Date(yearInt, calendarMonthIndex, 1),
+  );
+
+  const previousMonths = [];
+  let totalUnpaid = 0;
+
+  for (let i = 0; i < targetIndex; i++) {
+    const feeMonth = ACADEMIC_FEE_MONTHS[i];
+    const feeYear = getFeeYearForMonth(feeMonth, academicStartYear);
+    const details = getFeeRecordDetails(student, feeMonth, feeYear);
+
+    previousMonths.push({
+      month: feeMonth,
+      year: feeYear,
+      label: `${feeMonth} ${feeYear}`,
+      status: details.status,
+      due: details.due,
+    });
+    totalUnpaid += details.due;
+  }
+
+  const currentFeeYear = getFeeYearForMonth(month, academicStartYear);
+  const currentDetails = getFeeRecordDetails(student, month, currentFeeYear);
+  const currentMonth = {
+    month,
+    year: currentFeeYear,
+    label: `${month} ${currentFeeYear}`,
+    status: currentDetails.status,
+    due: currentDetails.due,
+  };
+  totalUnpaid += currentDetails.due;
+
+  return {
+    targetIndex,
+    calendarMonthIndex,
+    academicStartYear,
+    previousMonths,
+    currentMonth,
+    totalUnpaid,
+    dueDate: formatChallanDate(),
+    challanNo: `CH-${student.id.substring(1)}-${String(calendarMonthIndex + 1).padStart(2, "0")}${yearInt.toString().slice(-2)}`,
+  };
+};
+
+const buildChallanDescriptionRows = (breakdown, lateFee = 0) => {
+  const rows = [];
+
+  breakdown.previousMonths
+    .filter((entry) => entry.due > 0)
+    .forEach((entry) => {
+      rows.push([
+        `${entry.label} — ${entry.status}`,
+        `Rs. ${entry.due.toLocaleString()}`,
+      ]);
+    });
+
+  rows.push([
+    `${breakdown.currentMonth.label} — ${breakdown.currentMonth.status}`,
+    breakdown.currentMonth.due > 0
+      ? `Rs. ${breakdown.currentMonth.due.toLocaleString()}`
+      : "—",
+  ]);
+
+  rows.push([
+    "Total Unpaid Dues",
+    `Rs. ${breakdown.totalUnpaid.toLocaleString()}`,
+  ]);
+
+  if (lateFee > 0 && breakdown.totalUnpaid > 0) {
+    rows.push(["Late Fee (after due date)", `Rs. ${lateFee.toLocaleString()}`]);
+    rows.push([
+      "Grand Total (with late fee)",
+      `Rs. ${(breakdown.totalUnpaid + lateFee).toLocaleString()}`,
+    ]);
+  }
+
+  return rows;
+};
+
 const getCurrentMonthName = () => CALENDAR_MONTHS[new Date().getMonth()];
 
 const getNextStudentIdNumber = async () => {
@@ -1662,33 +1963,17 @@ app.get(
           .json({ success: false, message: "Student not found" });
       }
 
-      const targetIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
-      const calendarMonthIndex = CALENDAR_MONTHS.indexOf(month);
       const yearInt = parseInt(year);
 
-      if (targetIndex === -1 || calendarMonthIndex === -1) {
+      const breakdown = buildChallanFeeBreakdown(student, month, yearInt);
+      if (!breakdown) {
         return res
           .status(400)
           .json({ success: false, message: "Invalid month" });
       }
 
-      const academicStartYear = getAcademicYearStart(
-        new Date(yearInt, calendarMonthIndex, 1),
-      );
-
-      let arrears = 0;
-      for (let i = 0; i < targetIndex; i++) {
-        const arrearMonth = ACADEMIC_FEE_MONTHS[i];
-        const arrearYear = getFeeYearForMonth(arrearMonth, academicStartYear);
-        const record = student.feeRecords.find(
-          (r) => r.month === arrearMonth && r.year === arrearYear,
-        );
-        if (!record || record.status === "Unpaid") {
-          arrears += student.monthlyFee;
-        } else if (record.status === "Partial") {
-          arrears += student.monthlyFee - (record.paidAmount || 0);
-        }
-      }
+      const settingsDoc = await Settings.getSingleton();
+      const lateFee = settingsDoc.lateFee || 200;
 
       res.json({
         success: true,
@@ -1704,18 +1989,16 @@ app.get(
           },
           month,
           year: yearInt,
-          challanNo: `CH-${student.id.substring(1)}-${String(calendarMonthIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`,
-          issueDate: `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-01`,
-          dueDate: `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-10`,
-          currentFee: student.monthlyFee,
-          arrears,
-          totalWithinDue: student.monthlyFee + arrears,
-          lateSurcharge: 200,
-          totalAfterDue: student.monthlyFee + arrears + 200,
-          feeStatus:
-            student.feeRecords.find(
-              (r) => r.month === month && r.year === yearInt,
-            )?.status || "Unpaid",
+          challanNo: breakdown.challanNo,
+          issueDate: breakdown.dueDate,
+          dueDate: breakdown.dueDate,
+          previousMonths: breakdown.previousMonths,
+          currentMonth: breakdown.currentMonth,
+          totalUnpaid: breakdown.totalUnpaid,
+          lateSurcharge: lateFee,
+          totalAfterDue: breakdown.totalUnpaid + lateFee,
+          feeStatus: breakdown.currentMonth.status,
+          descriptionRows: buildChallanDescriptionRows(breakdown, lateFee),
         },
       });
     } catch (error) {
@@ -2058,50 +2341,20 @@ app.get(
       const schoolPhone = settingsDoc.schoolPhone || "";
       const bankDetails = settingsDoc.bankDetails || "";
       const lateFee = settingsDoc.lateFee || 200;
-      const dueDateDay = settingsDoc.dueDateDay || 10;
 
       const yearInt = parseInt(year);
-      const targetIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
-      const calendarMonthIndex = CALENDAR_MONTHS.indexOf(month);
-
-      if (targetIndex === -1 || calendarMonthIndex === -1) {
+      const breakdown = buildChallanFeeBreakdown(student, month, yearInt);
+      if (!breakdown) {
         return res
           .status(400)
           .json({ success: false, message: "Invalid month" });
       }
 
-      const academicStartYear = getAcademicYearStart(
-        new Date(yearInt, calendarMonthIndex, 1),
-      );
+      const { challanNo, dueDate, currentMonth } = breakdown;
+      const descriptionRows = buildChallanDescriptionRows(breakdown, lateFee);
+      const currentStatus = currentMonth.status;
 
-      let arrears = 0;
-      for (let i = 0; i < targetIndex; i++) {
-        const arrearMonth = ACADEMIC_FEE_MONTHS[i];
-        const arrearYear = getFeeYearForMonth(arrearMonth, academicStartYear);
-        const record = student.feeRecords.find(
-          (r) => r.month === arrearMonth && r.year === arrearYear,
-        );
-        if (!record || record.status === "Unpaid")
-          arrears += student.monthlyFee;
-        else if (record.status === "Partial")
-          arrears += student.monthlyFee - (record.paidAmount || 0);
-      }
-
-      const currentFee = student.monthlyFee;
-      const totalWithinDue = currentFee + arrears;
-      const totalAfterDue = totalWithinDue + lateFee;
-      const dueDate = `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-${String(dueDateDay).padStart(2, "0")}`;
-      const challanNo = `CH-${student.id.substring(1)}-${String(calendarMonthIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`;
-      const currentStatus =
-        student.feeRecords.find((r) => r.month === month && r.year === yearInt)
-          ?.status || "Unpaid";
-
-      const campusLabel =
-        student.campusId === "boys"
-          ? "Badar Colony Campus"
-          : student.campusId === "girls"
-            ? "Mega Road Campus"
-            : "Abbas Park Campus";
+      const campusLabel = getCampusLabel(student.campusId);
 
       // --- PDF Generation (A4, 3-copy family style) ---
       const doc = new PDFDocument({ size: "A4", margin: 0 });
@@ -2231,68 +2484,61 @@ app.get(
         drawField("Campus", campusLabel, rightX, infoY + lineH * 4.5, 145);
 
         // Fee table
-        const tableY = yBase + 152;
-        const tableH = 16;
+        const tableY = yBase + 148;
+        const headerH = 14;
+        const rowH = 11;
         const cols = { label: pad, amount: pageW - 90 };
         const tableW = innerW;
 
         // Table header
-        doc.rect(pad, tableY, tableW, tableH).fill("#e8f0fc");
+        doc.rect(pad, tableY, tableW, headerH).fill("#e8f0fc");
         doc
           .fillColor("#1a56a0")
           .font("Helvetica-Bold")
-          .fontSize(7)
-          .text("DESCRIPTION", cols.label + 4, tableY + 4, { width: 200 })
-          .text("AMOUNT (Rs)", cols.amount - 10, tableY + 4, {
+          .fontSize(6.5)
+          .text("DESCRIPTION", cols.label + 4, tableY + 3, { width: 260 })
+          .text("AMOUNT (Rs)", cols.amount - 10, tableY + 3, {
             width: 80,
             align: "right",
           });
 
-        const rows = [
-          ["Monthly Tuition Fee", `Rs. ${currentFee.toLocaleString()}`],
-          [
-            "Arrears (Previous Dues)",
-            arrears > 0 ? `Rs. ${arrears.toLocaleString()}` : "—",
-          ],
-          ["Total (Within Due Date)", `Rs. ${totalWithinDue.toLocaleString()}`],
-          [
-            `Late Fee (after ${dueDate})`,
-            `Rs. ${totalAfterDue.toLocaleString()}`,
-          ],
-        ];
-
-        rows.forEach(([label, amount], i) => {
-          const rowY = tableY + tableH + i * tableH;
-          if (i % 2 === 1) doc.rect(pad, rowY, tableW, tableH).fill("#f7faff");
-          const isBold = label.includes("Total") || label.includes("Late");
+        descriptionRows.forEach(([label, amount], i) => {
+          const rowY = tableY + headerH + i * rowH;
+          if (i % 2 === 1) doc.rect(pad, rowY, tableW, rowH).fill("#f7faff");
+          const isBold =
+            label.includes("Total") ||
+            label.includes("Grand") ||
+            label.includes("Late Fee");
           doc
             .fillColor(isBold ? "#1a56a0" : "#222222")
             .font(isBold ? "Helvetica-Bold" : "Helvetica")
-            .fontSize(7)
-            .text(label, cols.label + 4, rowY + 4, { width: 200 })
-            .text(amount, cols.amount - 10, rowY + 4, {
+            .fontSize(6.5)
+            .text(label, cols.label + 4, rowY + 2, { width: 260 })
+            .text(amount, cols.amount - 10, rowY + 2, {
               width: 80,
               align: "right",
             });
         });
 
-        // Status badge
+        const tableBottom = tableY + headerH + descriptionRows.length * rowH + 4;
+
+        // Status badge (current month)
         const statusColor =
           currentStatus === "Paid"
             ? "#1a8c5b"
             : currentStatus === "Partial"
               ? "#c47a00"
               : "#c0392b";
-        doc.rect(pad, tableY + tableH * 5 + 4, 60, 14).fill(statusColor);
+        doc.rect(pad, tableBottom, 72, 12).fill(statusColor);
         doc
           .fillColor("#ffffff")
           .font("Helvetica-Bold")
-          .fontSize(7)
+          .fontSize(6.5)
           .text(
-            `STATUS: ${currentStatus.toUpperCase()}`,
+            `CURRENT: ${currentStatus.toUpperCase()}`,
             pad + 2,
-            tableY + tableH * 5 + 8,
-            { width: 58, align: "center" },
+            tableBottom + 3,
+            { width: 68, align: "center" },
           );
 
         // Bank details
@@ -2300,7 +2546,7 @@ app.get(
           .fillColor("#555555")
           .font("Helvetica")
           .fontSize(6.5)
-          .text(`Bank: ${bankDetails}`, rightX, tableY + tableH * 5 + 6, {
+          .text(`Bank: ${bankDetails}`, rightX, tableBottom + 2, {
             width: innerW / 2,
           });
 
