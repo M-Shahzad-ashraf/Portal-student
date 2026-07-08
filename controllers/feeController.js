@@ -1,5 +1,14 @@
 const Student = require("../models/Student");
 const { generateReceiptNumber } = require("../utils/helpers");
+const {
+  ACADEMIC_FEE_MONTHS,
+  CALENDAR_MONTHS,
+  getAcademicYearStart,
+  getFeeYearForMonth,
+  resolveStudentFeeStartMonth,
+  getStudentFeeStartIndex,
+  isMonthBeforeFeeStart,
+} = require("../utils/feeUtils");
 
 // Get fee summary for a student
 const getStudentFeeSummary = async (req, res) => {
@@ -13,44 +22,21 @@ const getStudentFeeSummary = async (req, res) => {
       });
     }
 
-    const academicMonths = [
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December",
-      "January",
-      "February",
-    ];
-    const calendarMonths = [
-      "January",
-      "February",
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December",
-    ];
-    const currentMonthIndex = new Date().getMonth();
+    const currentAcademicIndex = ACADEMIC_FEE_MONTHS.indexOf(
+      CALENDAR_MONTHS[new Date().getMonth()],
+    );
+    const feeStartIndex = getStudentFeeStartIndex(student);
+    const academicStartYear = getAcademicYearStart();
 
     let totalPaid = 0;
     let expectedTotal = 0;
     const monthlyBreakdown = [];
 
-    for (let i = 0; i <= currentMonthIndex; i++) {
-      const month = months[i];
+    for (let i = feeStartIndex; i <= currentAcademicIndex; i++) {
+      const month = ACADEMIC_FEE_MONTHS[i];
+      const recordYear = getFeeYearForMonth(month, academicStartYear);
       const record = student.feeRecords.find(
-        (r) => r.month === month && r.year === 2026,
+        (r) => r.month === month && r.year === recordYear,
       );
       const amount = record?.amount || student.monthlyFee || 0;
       expectedTotal += amount;
@@ -102,6 +88,7 @@ const getStudentFeeSummary = async (req, res) => {
         studentId: student.id,
         studentName: student.name,
         monthlyFee: student.monthlyFee,
+        feeStartMonth: resolveStudentFeeStartMonth(student),
         totalPaid,
         totalDue: Math.max(0, expectedTotal - totalPaid),
         expectedTotal,
@@ -130,6 +117,13 @@ const updateFee = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Student not found",
+      });
+    }
+
+    if (isMonthBeforeFeeStart(student, month)) {
+      return res.status(400).json({
+        success: false,
+        message: `Fee is not applicable before the student's fee start month (${resolveStudentFeeStartMonth(student)})`,
       });
     }
 
@@ -209,13 +203,16 @@ const getFeeOverview = async (req, res) => {
 
     const students = await Student.find(query);
 
-    let totalStudents = students.length;
+    let totalStudents = 0;
     let paid = 0;
     let partial = 0;
     let unpaid = 0;
     let totalCollected = 0;
 
     students.forEach((student) => {
+      if (isMonthBeforeFeeStart(student, month)) return;
+      totalStudents++;
+
       const feeRecord = student.feeRecords.find(
         (r) => r.month === month && r.year === parseInt(year),
       );
@@ -236,6 +233,7 @@ const getFeeOverview = async (req, res) => {
     });
 
     const expectedTotal = students.reduce((sum, student) => {
+      if (isMonthBeforeFeeStart(student, month)) return sum;
       const feeRecord = student.feeRecords.find(
         (r) => r.month === month && r.year === parseInt(year),
       );
@@ -286,6 +284,26 @@ const getMonthlyFeeReport = async (req, res) => {
     const students = await Student.find(query).populate("classId");
 
     const report = students.map((student) => {
+      if (isMonthBeforeFeeStart(student, month)) {
+        return {
+          studentId: student.id,
+          studentName: student.name,
+          campusId: student.campusId,
+          classId: student.classId,
+          section: student.section,
+          rollNo: student.rollNo,
+          fatherName: student.fatherName,
+          fatherPhone: student.fatherPhone,
+          monthlyFee: student.monthlyFee,
+          feeStatus: "N/A",
+          paidAmount: 0,
+          amount: 0,
+          paidDate: null,
+          receipt: null,
+          feeStartMonth: resolveStudentFeeStartMonth(student),
+        };
+      }
+
       const feeRecord = student.feeRecords.find(
         (r) => r.month === month && r.year === parseInt(year),
       );
@@ -304,8 +322,10 @@ const getMonthlyFeeReport = async (req, res) => {
         paidAmount:
           feeRecord?.paidAmount ||
           (feeRecord?.status === "Paid" ? feeRecord.amount : 0),
+        amount: feeRecord?.amount || student.monthlyFee || 0,
         paidDate: feeRecord?.paidDate,
         receipt: feeRecord?.receipt,
+        feeStartMonth: resolveStudentFeeStartMonth(student),
       };
     });
 
@@ -343,22 +363,8 @@ const generateChallan = async (req, res) => {
       });
     }
 
-    const months = [
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December",
-      "January",
-      "February",
-    ];
-    const targetIndex = academicMonths.indexOf(month);
-    const calendarMonthIndex = calendarMonths.indexOf(month);
+    const targetIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
+    const calendarMonthIndex = CALENDAR_MONTHS.indexOf(month);
     const yearInt = parseInt(year);
 
     if (targetIndex === -1 || calendarMonthIndex === -1) {
@@ -369,11 +375,19 @@ const generateChallan = async (req, res) => {
     }
 
     const academicStartYear = calendarMonthIndex < 2 ? yearInt - 1 : yearInt;
+    const feeStartIndex = getStudentFeeStartIndex(student);
+
+    if (targetIndex < feeStartIndex) {
+      return res.status(400).json({
+        success: false,
+        message: `Fee is not applicable before the student's fee start month (${resolveStudentFeeStartMonth(student)})`,
+      });
+    }
 
     // Calculate arrears for previous months
     let arrears = 0;
-    for (let i = 0; i < targetIndex; i++) {
-      const prevMonth = academicMonths[i];
+    for (let i = feeStartIndex; i < targetIndex; i++) {
+      const prevMonth = ACADEMIC_FEE_MONTHS[i];
       const prevYear =
         prevMonth === "January" || prevMonth === "February"
           ? academicStartYear + 1

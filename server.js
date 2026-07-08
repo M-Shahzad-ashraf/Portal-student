@@ -16,6 +16,19 @@ const Settings = require("./models/Settings");
 
 // Auth middleware
 const { authenticate } = require("./middleware/auth");
+const {
+  ACADEMIC_FEE_MONTHS,
+  CALENDAR_MONTHS,
+  getAcademicYearStart,
+  getFeeYearForMonth,
+  getCurrentMonthName,
+  getDefaultFeeStartMonth,
+  resolveStudentFeeStartMonth,
+  getStudentFeeStartIndex,
+  isMonthBeforeFeeStart,
+  validateFeeStartMonth,
+  createFeeRecordsFromStartMonth,
+} = require("./utils/feeUtils");
 
 // Multer config — memory storage for xlsx/csv import
 const upload = multer({ storage: multer.memoryStorage() });
@@ -70,6 +83,8 @@ async function initializeDatabase() {
       console.log("✅ Default classes created");
     }
 
+    await migrateFeeStartMonth();
+
     isDatabaseReady = true;
     console.log("🎉 Server ready to use!");
   })();
@@ -111,6 +126,23 @@ async function ensureDefaultAdmin() {
   }
 
   return admin;
+}
+
+async function migrateFeeStartMonth() {
+  const students = await Student.find({
+    $or: [{ feeStartMonth: { $exists: false } }, { feeStartMonth: null }],
+  });
+
+  if (students.length === 0) return;
+
+  let migrated = 0;
+  for (const student of students) {
+    student.feeStartMonth = resolveStudentFeeStartMonth(student);
+    await student.save();
+    migrated++;
+  }
+
+  console.log(`✅ Migrated feeStartMonth for ${migrated} existing student(s)`);
 }
 
 initializeDatabase().catch((err) => {
@@ -603,6 +635,8 @@ app.get("/api/dashboard/stats", authenticate, async (req, res) => {
       totalCollected = 0;
 
     students.forEach((student) => {
+      if (isMonthBeforeFeeStart(student, currentMonth)) return;
+
       const monthRecord = student.feeRecords.find(
         (r) => r.month === currentMonth,
       );
@@ -633,6 +667,8 @@ app.get("/api/dashboard/stats", authenticate, async (req, res) => {
 
       let campusPaid = 0;
       campusStudents.forEach((student) => {
+        if (isMonthBeforeFeeStart(student, currentMonth)) return;
+
         const monthRecord = student.feeRecords.find(
           (r) => r.month === currentMonth,
         );
@@ -1012,31 +1048,22 @@ app.post(
 
           const monthlyFee = parseInt(getCell(row, "monthlyFee")) || 2000;
           const now = new Date();
-          const academicStartYear =
-            now.getMonth() < 2 ? now.getFullYear() - 1 : now.getFullYear();
-          const academicMonths = [
-            "March",
-            "April",
-            "May",
-            "June",
-            "July",
-            "August",
-            "September",
-            "October",
-            "November",
-            "December",
-            "January",
-            "February",
-          ];
-          const feeRecords = academicMonths.map((month) => ({
-            month,
-            year:
-              month === "January" || month === "February"
-                ? academicStartYear + 1
-                : academicStartYear,
-            status: "Unpaid",
-            amount: monthlyFee,
-          }));
+          const academicStartYear = getAcademicYearStart(now);
+          const importFeeStartMonth =
+            getCell(row, "feeStartMonth") || getDefaultFeeStartMonth(now);
+          const feeStartValidation = validateFeeStartMonth(importFeeStartMonth);
+          if (!feeStartValidation.valid) {
+            results.errors.push(
+              `Row ${rowNum} skipped — ${feeStartValidation.message}: ${name}`,
+            );
+            results.skipped++;
+            continue;
+          }
+          const feeRecords = createFeeRecordsFromStartMonth(
+            monthlyFee,
+            importFeeStartMonth,
+            academicStartYear,
+          );
 
           const genderInput = getCell(row, "gender").toUpperCase();
           const gender = genderInput.startsWith("M")
@@ -1063,6 +1090,7 @@ app.post(
             bForm: getCell(row, "bForm"),
             address: getCell(row, "address"),
             feeRecords,
+            feeStartMonth: importFeeStartMonth,
             admissionDate: new Date(),
             active: true,
           });
@@ -1188,6 +1216,7 @@ app.post("/api/students", authenticate, async (req, res) => {
       email,
       address,
       notes,
+      feeStartMonth,
     } = req.body;
 
     // Validation
@@ -1195,6 +1224,15 @@ app.post("/api/students", authenticate, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Name, Father Name, Campus, Class, and Section are required",
+      });
+    }
+
+    const resolvedFeeStartMonth = feeStartMonth || getDefaultFeeStartMonth();
+    const feeStartValidation = validateFeeStartMonth(resolvedFeeStartMonth);
+    if (!feeStartValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: feeStartValidation.message,
       });
     }
 
@@ -1219,33 +1257,14 @@ app.post("/api/students", authenticate, async (req, res) => {
       normalizedSection,
     );
 
-    // Create fee records for academic year (March - February)
-    const academicMonths = [
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December",
-      "January",
-      "February",
-    ];
+    // Create fee records from fee start month through end of academic year
     const now = new Date();
-    const academicStartYear =
-      now.getMonth() < 2 ? now.getFullYear() - 1 : now.getFullYear();
-    const feeRecords = academicMonths.map((month) => ({
-      month,
-      year:
-        month === "January" || month === "February"
-          ? academicStartYear + 1
-          : academicStartYear,
-      status: "Unpaid",
-      amount: monthlyFee || 2000,
-    }));
+    const academicStartYear = getAcademicYearStart(now);
+    const feeRecords = createFeeRecordsFromStartMonth(
+      monthlyFee || 2000,
+      resolvedFeeStartMonth,
+      academicStartYear,
+    );
 
     // Create new student
     const student = new Student({
@@ -1267,6 +1286,7 @@ app.post("/api/students", authenticate, async (req, res) => {
       address: address || "",
       notes: notes || "",
       feeRecords,
+      feeStartMonth: resolvedFeeStartMonth,
       admissionDate: new Date(),
       active: true,
     });
@@ -1321,6 +1341,7 @@ app.put("/api/students/:id", authenticate, async (req, res) => {
       "email",
       "address",
       "notes",
+      "feeStartMonth",
     ];
 
     updates.forEach((field) => {
@@ -1328,6 +1349,16 @@ app.put("/api/students/:id", authenticate, async (req, res) => {
         student[field] = req.body[field];
       }
     });
+
+    if (req.body.feeStartMonth !== undefined) {
+      const feeStartValidation = validateFeeStartMonth(req.body.feeStartMonth);
+      if (!feeStartValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: feeStartValidation.message,
+        });
+      }
+    }
 
     student.updatedAt = new Date();
     await student.save();
@@ -1487,49 +1518,6 @@ app.delete("/api/classes/:id", authenticate, async (req, res) => {
 });
 
 // ==================== FEE ROUTES ====================
-const ACADEMIC_FEE_MONTHS = [
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-  "January",
-  "February",
-];
-const CALENDAR_MONTHS = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-
-const getAcademicYearStart = (date = new Date()) => {
-  const month = date.getMonth();
-  const year = date.getFullYear();
-  return month < 2 ? year - 1 : year;
-};
-
-const getFeeYearForMonth = (
-  month,
-  academicStartYear = getAcademicYearStart(),
-) => {
-  if (month === "January" || month === "February") return academicStartYear + 1;
-  return academicStartYear;
-};
-
 const formatChallanDate = (date = new Date()) => {
   const day = String(date.getDate()).padStart(2, "0");
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -1559,8 +1547,13 @@ const getFeeRecordDetails = (student, feeMonth, feeYear) => {
 const buildChallanFeeBreakdown = (student, month, yearInt) => {
   const targetIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
   const calendarMonthIndex = CALENDAR_MONTHS.indexOf(month);
+  const feeStartIndex = getStudentFeeStartIndex(student);
 
   if (targetIndex === -1 || calendarMonthIndex === -1) {
+    return null;
+  }
+
+  if (targetIndex < feeStartIndex) {
     return null;
   }
 
@@ -1571,7 +1564,7 @@ const buildChallanFeeBreakdown = (student, month, yearInt) => {
   const previousMonths = [];
   let totalUnpaid = 0;
 
-  for (let i = 0; i < targetIndex; i++) {
+  for (let i = feeStartIndex; i < targetIndex; i++) {
     const feeMonth = ACADEMIC_FEE_MONTHS[i];
     const feeYear = getFeeYearForMonth(feeMonth, academicStartYear);
     const details = getFeeRecordDetails(student, feeMonth, feeYear);
@@ -1643,8 +1636,6 @@ const buildChallanDescriptionRows = (breakdown, lateFee = 0) => {
 
   return rows;
 };
-
-const getCurrentMonthName = () => CALENDAR_MONTHS[new Date().getMonth()];
 
 const getNextStudentIdNumber = async () => {
   const students = await Student.find({ id: /^S\d+$/ })
@@ -1724,12 +1715,16 @@ app.get("/api/fees/overview", authenticate, async (req, res) => {
 
     const students = await Student.find(query);
 
-    let paid = 0,
+    let applicableStudents = 0,
+      paid = 0,
       partial = 0,
       unpaid = 0,
       totalCollected = 0,
       expectedTotal = 0;
     students.forEach((student) => {
+      if (isMonthBeforeFeeStart(student, month)) return;
+      applicableStudents++;
+
       const record = student.feeRecords.find(
         (r) => r.month === month && r.year === feeYear,
       );
@@ -1755,7 +1750,7 @@ app.get("/api/fees/overview", authenticate, async (req, res) => {
       data: {
         month,
         year: feeYear,
-        totalStudents: students.length,
+        totalStudents: applicableStudents,
         paid,
         partial,
         unpaid,
@@ -1785,6 +1780,26 @@ app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
     const students = await Student.find(query);
 
     const report = students.map((student) => {
+      if (isMonthBeforeFeeStart(student, month)) {
+        return {
+          studentId: student.id,
+          studentName: student.name,
+          campusId: student.campusId,
+          classId: student.classId,
+          section: student.section,
+          rollNo: student.rollNo,
+          fatherName: student.fatherName,
+          fatherPhone: student.fatherPhone,
+          monthlyFee: student.monthlyFee,
+          feeStatus: "N/A",
+          paidAmount: 0,
+          amount: 0,
+          paidDate: null,
+          receipt: null,
+          feeStartMonth: resolveStudentFeeStartMonth(student),
+        };
+      }
+
       const feeRecord = student.feeRecords.find(
         (r) => r.month === month && r.year === feeYear,
       );
@@ -1806,6 +1821,7 @@ app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
         amount: feeRecord?.amount || student.monthlyFee || 0,
         paidDate: feeRecord?.paidDate,
         receipt: feeRecord?.receipt,
+        feeStartMonth: resolveStudentFeeStartMonth(student),
       };
     });
 
@@ -1840,6 +1856,7 @@ app.get(
 
       const academicStartYear = getAcademicYearStart();
       const currentMonth = getCurrentMonthName();
+      const feeStartIndex = getStudentFeeStartIndex(student);
       const monthlyRecords = buildMonthlyRecordsMap(
         student.feeRecords,
         academicStartYear,
@@ -1848,6 +1865,9 @@ app.get(
       let expectedTotal = 0;
       let totalPaid = 0;
       for (const month of ACADEMIC_FEE_MONTHS) {
+        const monthIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
+        if (monthIndex < feeStartIndex) continue;
+
         const year = getFeeYearForMonth(month, academicStartYear);
         const record =
           student.feeRecords.find(
@@ -1875,6 +1895,7 @@ app.get(
           outstanding,
           currentMonth,
           academicYear: `${academicStartYear}-${academicStartYear + 1}`,
+          feeStartMonth: resolveStudentFeeStartMonth(student),
           monthlyRecords,
           monthlyBreakdown: student.feeRecords,
         },
@@ -1900,6 +1921,13 @@ app.put(
         return res
           .status(404)
           .json({ success: false, message: "Student not found" });
+      }
+
+      if (isMonthBeforeFeeStart(student, month)) {
+        return res.status(400).json({
+          success: false,
+          message: `Fee is not applicable before the student's fee start month (${resolveStudentFeeStartMonth(student)})`,
+        });
       }
 
       let feeRecord = student.feeRecords.find(
@@ -1964,6 +1992,13 @@ app.get(
       }
 
       const yearInt = parseInt(year);
+
+      if (isMonthBeforeFeeStart(student, month)) {
+        return res.status(400).json({
+          success: false,
+          message: `Fee is not applicable before the student's fee start month (${resolveStudentFeeStartMonth(student)})`,
+        });
+      }
 
       const breakdown = buildChallanFeeBreakdown(student, month, yearInt);
       if (!breakdown) {
@@ -2343,6 +2378,14 @@ app.get(
       const lateFee = settingsDoc.lateFee || 200;
 
       const yearInt = parseInt(year);
+
+      if (isMonthBeforeFeeStart(student, month)) {
+        return res.status(400).json({
+          success: false,
+          message: `Fee is not applicable before the student's fee start month (${resolveStudentFeeStartMonth(student)})`,
+        });
+      }
+
       const breakdown = buildChallanFeeBreakdown(student, month, yearInt);
       if (!breakdown) {
         return res

@@ -6,6 +6,12 @@ const {
   parseExcelDate,
   getCurrentDate,
 } = require("../utils/helpers");
+const {
+  getAcademicYearStart,
+  getDefaultFeeStartMonth,
+  validateFeeStartMonth,
+  createFeeRecordsFromStartMonth,
+} = require("../utils/feeUtils");
 const XLSX = require("xlsx");
 
 // Get all students with pagination and filters
@@ -120,6 +126,7 @@ const createStudent = async (req, res) => {
       email,
       address,
       notes,
+      feeStartMonth,
     } = req.body;
 
     let studentId = id;
@@ -136,28 +143,20 @@ const createStudent = async (req, res) => {
       }
     }
 
-    // Create fee records for all months of 2026
-    const months = [
-      "January",
-      "February",
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December",
-    ];
+    const resolvedFeeStartMonth = feeStartMonth || getDefaultFeeStartMonth();
+    const feeStartValidation = validateFeeStartMonth(resolvedFeeStartMonth);
+    if (!feeStartValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: feeStartValidation.message,
+      });
+    }
 
-    const feeRecords = months.map((month) => ({
-      month,
-      year: 2026,
-      status: "Unpaid",
-      amount: monthlyFee || 2000,
-    }));
+    const feeRecords = createFeeRecordsFromStartMonth(
+      monthlyFee || 2000,
+      resolvedFeeStartMonth,
+      getAcademicYearStart(),
+    );
 
     const student = new Student({
       id: studentId,
@@ -177,6 +176,7 @@ const createStudent = async (req, res) => {
       address,
       notes,
       feeRecords,
+      feeStartMonth: resolvedFeeStartMonth,
       admissionDate: getCurrentDate(),
     });
 
@@ -237,7 +237,18 @@ const updateStudent = async (req, res) => {
       "email",
       "address",
       "notes",
+      "feeStartMonth",
     ];
+
+    if (updates.feeStartMonth !== undefined) {
+      const feeStartValidation = validateFeeStartMonth(updates.feeStartMonth);
+      if (!feeStartValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: feeStartValidation.message,
+        });
+      }
+    }
 
     allowedUpdates.forEach((field) => {
       if (updates[field] !== undefined) {
@@ -422,26 +433,12 @@ const importStudents = async (req, res) => {
           colMap.address !== -1 ? String(row[colMap.address] || "").trim() : "";
 
         const studentId = await generateStudentId(Student);
-        const months = [
-          "January",
-          "February",
-          "March",
-          "April",
-          "May",
-          "June",
-          "July",
-          "August",
-          "September",
-          "October",
-          "November",
-          "December",
-        ];
-        const feeRecords = months.map((month) => ({
-          month,
-          year: 2026,
-          status: "Unpaid",
-          amount: monthlyFee,
-        }));
+        const feeStartMonth = getDefaultFeeStartMonth();
+        const feeRecords = createFeeRecordsFromStartMonth(
+          monthlyFee,
+          feeStartMonth,
+          getAcademicYearStart(),
+        );
 
         const student = new Student({
           id: studentId,
@@ -459,6 +456,7 @@ const importStudents = async (req, res) => {
           email,
           address,
           feeRecords,
+          feeStartMonth,
           admissionDate: getCurrentDate(),
         });
 
@@ -511,6 +509,7 @@ const exportStudents = async (req, res) => {
       Email: s.email,
       Address: s.address,
       "Monthly Fee": s.monthlyFee,
+      "Fee Start Month": s.feeStartMonth,
       "Admission Date": s.admissionDate
         ? s.admissionDate.toISOString().split("T")[0]
         : "",
