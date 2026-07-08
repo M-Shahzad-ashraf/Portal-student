@@ -97,6 +97,17 @@ const createFeeRecordsFromStartMonth = (
   }));
 };
 
+const syncFeeRecordAmounts = (student, monthlyFee) => {
+  const nextAmount = Number(monthlyFee);
+  if (!Number.isFinite(nextAmount) || nextAmount <= 0) return;
+  if (!Array.isArray(student.feeRecords)) return;
+
+  student.feeRecords.forEach((record) => {
+    if (record.status === "Paid") return;
+    record.amount = nextAmount;
+  });
+};
+
 module.exports = {
   ACADEMIC_FEE_MONTHS,
   CALENDAR_MONTHS,
@@ -109,4 +120,5 @@ module.exports = {
   isMonthBeforeFeeStart,
   validateFeeStartMonth,
   createFeeRecordsFromStartMonth,
+  syncFeeRecordAmounts,
 };

@@ -11,6 +11,7 @@ const {
   getDefaultFeeStartMonth,
   validateFeeStartMonth,
   createFeeRecordsFromStartMonth,
+  syncFeeRecordAmounts,
 } = require("../utils/feeUtils");
 const XLSX = require("xlsx");
 
@@ -255,6 +256,10 @@ const updateStudent = async (req, res) => {
         student[field] = updates[field];
       }
     });
+
+    if (updates.monthlyFee !== undefined) {
+      syncFeeRecordAmounts(student, updates.monthlyFee);
+    }
 
     await student.save();
 

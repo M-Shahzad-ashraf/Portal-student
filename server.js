@@ -28,6 +28,7 @@ const {
   isMonthBeforeFeeStart,
   validateFeeStartMonth,
   createFeeRecordsFromStartMonth,
+  syncFeeRecordAmounts,
 } = require("./utils/feeUtils");
 
 // Multer config — memory storage for xlsx/csv import
@@ -1349,6 +1350,10 @@ app.put("/api/students/:id", authenticate, async (req, res) => {
         student[field] = req.body[field];
       }
     });
+
+    if (req.body.monthlyFee !== undefined) {
+      syncFeeRecordAmounts(student, req.body.monthlyFee);
+    }
 
     if (req.body.feeStartMonth !== undefined) {
       const feeStartValidation = validateFeeStartMonth(req.body.feeStartMonth);
