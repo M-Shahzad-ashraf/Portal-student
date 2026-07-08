@@ -1598,7 +1598,7 @@ const buildChallanFeeBreakdown = (student, month, yearInt) => {
     currentMonth,
     totalUnpaid,
     dueDate: formatChallanDate(),
-    challanNo: `CH-${student.id.substring(1)}-${String(calendarMonthIndex + 1).padStart(2, "0")}${yearInt.toString().slice(-2)}`,
+    challanNo: student.id,
   };
 };
 

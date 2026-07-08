@@ -409,7 +409,7 @@ const generateChallan = async (req, res) => {
     const totalWithinDue = currentFee + arrears;
     const totalAfterDue = totalWithinDue + lateSurcharge;
 
-    const challanNo = `CH-${student.id.substring(1)}-${String(calendarMonthIndex + 1).padStart(2, "0")}${year.toString().slice(-2)}`;
+    const challanNo = student.id;
     const issueDate = `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-01`;
     const dueDate = `${year}-${String(calendarMonthIndex + 1).padStart(2, "0")}-10`;
 
