@@ -5,6 +5,8 @@ const jwt = require("jsonwebtoken");
 const multer = require("multer");
 const XLSX = require("xlsx");
 const PDFDocument = require("pdfkit");
+const fs = require("fs");
+const path = require("path");
 require("dotenv").config();
 
 // Import Models
@@ -1410,7 +1412,22 @@ app.get("/api/classes", authenticate, async (req, res) => {
     if (campusId) query.campusId = campusId;
 
     const classes = await Class.find(query).sort({ order: 1 });
-    res.json({ success: true, data: classes });
+    const data = await Promise.all(
+      classes.map(async (classDoc) => {
+        const studentCount = await Student.countDocuments({
+          campusId: classDoc.campusId,
+          classId: classDoc.id,
+          active: true,
+        });
+
+        return {
+          ...classDoc.toObject(),
+          studentCount,
+        };
+      }),
+    );
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error("Get classes error:", error);
     res
@@ -1434,7 +1451,20 @@ app.get("/api/classes/:id", authenticate, async (req, res) => {
       active: true,
     });
 
-    res.json({ success: true, data: { ...classDoc.toObject(), studentCount } });
+    const sectionsWithCount = {};
+    for (const section of classDoc.sections) {
+      sectionsWithCount[section] = await Student.countDocuments({
+        classId: classDoc.id,
+        campusId: classDoc.campusId,
+        section,
+        active: true,
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { ...classDoc.toObject(), studentCount, sectionsWithCount },
+    });
   } catch (error) {
     console.error("Get class error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch class" });
@@ -2381,6 +2411,11 @@ app.get(
       const schoolPhone = settingsDoc.schoolPhone || "";
       const bankDetails = settingsDoc.bankDetails || "";
       const lateFee = settingsDoc.lateFee || 200;
+      const challanLogoPath = path.join(
+        __dirname,
+        "../mmhs-frontend/src/assets/image.png",
+      );
+      const hasChallanLogo = fs.existsSync(challanLogoPath);
 
       const yearInt = parseInt(year);
 
@@ -2404,7 +2439,7 @@ app.get(
 
       const campusLabel = getCampusLabel(student.campusId);
 
-      // --- PDF Generation (A4, 3-copy family style) ---
+      // --- PDF Generation (A4, 2-copy family style) ---
       const doc = new PDFDocument({ size: "A4", margin: 0 });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
@@ -2415,8 +2450,8 @@ app.get(
 
       const pageW = 595.28;
       const pageH = 841.89;
-      const copyH = pageH / 3; // ~280px per copy
-      const copyLabels = ["Bank Copy", "School Copy", "Student Copy"];
+      const copyH = pageH / 2;
+      const copyLabels = ["School Copy", "Student Copy"];
       const themeColor = "#1a56a0";
       const accentColor = "#e63946";
 
@@ -2426,15 +2461,22 @@ app.get(
         const innerW = pageW - pad * 2;
 
         // Background stripe at top
-        doc.rect(0, yBase, pageW, 38).fill(themeColor);
+        doc.rect(0, yBase, pageW, 44).fill(themeColor);
+
+        if (hasChallanLogo) {
+          doc.image(challanLogoPath, pad, yBase + 7, {
+            width: 30,
+            height: 30,
+          });
+        }
 
         // School name
         doc
           .fillColor("#ffffff")
           .font("Helvetica-Bold")
-          .fontSize(10)
-          .text(schoolName, pad, yBase + 7, {
-            width: innerW - 80,
+          .fontSize(12)
+          .text(schoolName, hasChallanLogo ? pad + 38 : pad, yBase + 7, {
+            width: innerW - 120,
             align: "left",
           });
 
@@ -2443,8 +2485,8 @@ app.get(
         doc
           .fillColor("#ffffff")
           .font("Helvetica-Bold")
-          .fontSize(8)
-          .text(copyLabel, pageW - 90, yBase + 13, {
+          .fontSize(9)
+          .text(copyLabel, pageW - 90, yBase + 12, {
             width: 75,
             align: "center",
           });
@@ -2453,25 +2495,30 @@ app.get(
         doc
           .fillColor("#ccddff")
           .font("Helvetica")
-          .fontSize(7)
-          .text(`${schoolAddress}  |  ${schoolPhone}`, pad, yBase + 22, {
-            width: innerW - 80,
-          });
+          .fontSize(8)
+          .text(
+            `${schoolAddress}  |  ${schoolPhone}`,
+            hasChallanLogo ? pad + 38 : pad,
+            yBase + 25,
+            {
+              width: innerW - 120,
+            },
+          );
 
         // Challan title
         doc
           .fillColor("#1a56a0")
           .font("Helvetica-Bold")
-          .fontSize(9)
-          .text("FEE CHALLAN", 0, yBase + 42, {
+          .fontSize(11)
+          .text("FEE CHALLAN", 0, yBase + 50, {
             width: pageW,
             align: "center",
           });
 
         // Divider
         doc
-          .moveTo(pad, yBase + 54)
-          .lineTo(pageW - pad, yBase + 54)
+          .moveTo(pad, yBase + 64)
+          .lineTo(pageW - pad, yBase + 64)
           .strokeColor("#c0cfe0")
           .lineWidth(0.5)
           .stroke();
@@ -2479,19 +2526,19 @@ app.get(
         // Two-column info
         const leftX = pad;
         const rightX = pageW / 2 + 10;
-        const infoY = yBase + 58;
-        const lineH = 13;
+        const infoY = yBase + 70;
+        const lineH = 16;
 
         const drawField = (label, value, x, y, w) => {
           doc
             .fillColor("#666666")
             .font("Helvetica")
-            .fontSize(6.5)
+            .fontSize(7.5)
             .text(label.toUpperCase(), x, y, { width: w });
           doc
             .fillColor("#111111")
             .font("Helvetica-Bold")
-            .fontSize(7.5)
+            .fontSize(9)
             .text(value || "—", x, y + 7, { width: w });
         };
 
@@ -2532,9 +2579,9 @@ app.get(
         drawField("Campus", campusLabel, rightX, infoY + lineH * 4.5, 145);
 
         // Fee table
-        const tableY = yBase + 148;
-        const headerH = 14;
-        const rowH = 11;
+        const tableY = yBase + 178;
+        const headerH = 16;
+        const rowH = 13;
         const cols = { label: pad, amount: pageW - 90 };
         const tableW = innerW;
 
@@ -2543,9 +2590,9 @@ app.get(
         doc
           .fillColor("#1a56a0")
           .font("Helvetica-Bold")
-          .fontSize(6.5)
-          .text("DESCRIPTION", cols.label + 4, tableY + 3, { width: 260 })
-          .text("AMOUNT (Rs)", cols.amount - 10, tableY + 3, {
+          .fontSize(7.5)
+          .text("DESCRIPTION", cols.label + 4, tableY + 4, { width: 270 })
+          .text("AMOUNT (Rs)", cols.amount - 10, tableY + 4, {
             width: 80,
             align: "right",
           });
@@ -2560,9 +2607,9 @@ app.get(
           doc
             .fillColor(isBold ? "#1a56a0" : "#222222")
             .font(isBold ? "Helvetica-Bold" : "Helvetica")
-            .fontSize(6.5)
-            .text(label, cols.label + 4, rowY + 2, { width: 260 })
-            .text(amount, cols.amount - 10, rowY + 2, {
+            .fontSize(7.5)
+            .text(label, cols.label + 4, rowY + 3, { width: 270 })
+            .text(amount, cols.amount - 10, rowY + 3, {
               width: 80,
               align: "right",
             });
@@ -2581,7 +2628,7 @@ app.get(
         doc
           .fillColor("#ffffff")
           .font("Helvetica-Bold")
-          .fontSize(6.5)
+          .fontSize(7)
           .text(
             `CURRENT: ${currentStatus.toUpperCase()}`,
             pad + 2,
@@ -2593,13 +2640,13 @@ app.get(
         doc
           .fillColor("#555555")
           .font("Helvetica")
-          .fontSize(6.5)
+          .fontSize(7)
           .text(`Bank: ${bankDetails}`, rightX, tableBottom + 2, {
             width: innerW / 2,
           });
 
         // Divider between copies
-        if (idx < 2) {
+        if (idx < copyLabels.length - 1) {
           doc.save();
           doc.dash(4, { space: 3 });
           doc

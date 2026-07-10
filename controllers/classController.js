@@ -10,10 +10,24 @@ const getAllClasses = async (req, res) => {
     if (campusId) query.campusId = campusId;
 
     const classes = await Class.find(query).sort({ order: 1, name: 1 });
+    const data = await Promise.all(
+      classes.map(async (classDoc) => {
+        const studentCount = await Student.countDocuments({
+          campusId: classDoc.campusId,
+          classId: classDoc.id,
+          active: true,
+        });
+
+        return {
+          ...classDoc.toObject(),
+          studentCount,
+        };
+      }),
+    );
 
     res.json({
       success: true,
-      data: classes,
+      data,
     });
   } catch (error) {
     console.error("Get all classes error:", error);
