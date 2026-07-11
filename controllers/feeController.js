@@ -195,11 +195,12 @@ const updateFee = async (req, res) => {
 // Get fee overview by campus/class
 const getFeeOverview = async (req, res) => {
   try {
-    const { campusId, classId, month = "June", year = 2026 } = req.query;
+    const { campusId, classId, section, month = "June", year = 2026 } = req.query;
 
     let query = { active: true };
     if (campusId) query.campusId = campusId;
     if (classId) query.classId = classId;
+    if (section) query.section = String(section).toUpperCase();
 
     const students = await Student.find(query);
 
@@ -269,7 +270,7 @@ const getFeeOverview = async (req, res) => {
 // Get fee records for a specific month across all students
 const getMonthlyFeeReport = async (req, res) => {
   try {
-    const { month, year = 2026, campusId } = req.query;
+    const { month, year = 2026, campusId, classId, section } = req.query;
 
     if (!month) {
       return res.status(400).json({
@@ -280,6 +281,8 @@ const getMonthlyFeeReport = async (req, res) => {
 
     let query = { active: true };
     if (campusId) query.campusId = campusId;
+    if (classId) query.classId = classId;
+    if (section) query.section = String(section).toUpperCase();
 
     const students = await Student.find(query).populate("classId");
 

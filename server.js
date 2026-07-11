@@ -1743,10 +1743,12 @@ const buildMonthlyRecordsMap = (
 
 app.get("/api/fees/overview", authenticate, async (req, res) => {
   try {
-    const { campusId, month = getCurrentMonthName(), year } = req.query;
+    const { campusId, classId, section, month = getCurrentMonthName(), year } = req.query;
     const feeYear = year ? parseInt(year) : getFeeYearForMonth(month);
     let query = { active: true };
     if (campusId) query.campusId = campusId;
+    if (classId) query.classId = classId;
+    if (section) query.section = String(section).toUpperCase();
 
     const students = await Student.find(query);
 
@@ -1807,10 +1809,12 @@ app.get("/api/fees/overview", authenticate, async (req, res) => {
 
 app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
   try {
-    const { month = getCurrentMonthName(), year, campusId } = req.query;
+    const { month = getCurrentMonthName(), year, campusId, classId, section } = req.query;
     const feeYear = year ? parseInt(year) : getFeeYearForMonth(month);
     let query = { active: true };
     if (campusId) query.campusId = campusId;
+    if (classId) query.classId = classId;
+    if (section) query.section = String(section).toUpperCase();
 
     const students = await Student.find(query);
 
