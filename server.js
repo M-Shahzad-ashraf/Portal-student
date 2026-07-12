@@ -465,7 +465,7 @@ app.post("/api/auth/admin/login", async (req, res) => {
   try {
     let user = await User.findOne({ username, role: "admin" });
 
-    if (!user && username === "admin") {
+    if (!user && username === "admin" && !(await User.exists({ role: "admin" }))) {
       user = new User({
         username: "admin",
         password: "admin123",
@@ -2047,7 +2047,7 @@ app.get(
       }
 
       const settingsDoc = await Settings.getSingleton();
-      const lateFee = settingsDoc.lateFee || 200;
+      const lateFee = settingsDoc.lateFee ?? 200;
 
       res.json({
         success: true,
@@ -2335,16 +2335,24 @@ app.put("/api/settings", authenticate, async (req, res) => {
     }
 
     if (adminData) {
-      const admin = await User.findOne({ role: "admin" });
+      const nextUsername = adminData.username?.trim();
+      let admin = nextUsername
+        ? await User.findOne({ role: "admin", username: nextUsername })
+        : null;
+
+      if (!admin) {
+        admin = await User.findOne({ role: "admin" }).sort({ createdAt: 1 });
+      }
+
       if (admin) {
-        if (adminData.username?.trim())
-          admin.username = adminData.username.trim();
+        if (nextUsername) admin.username = nextUsername;
         if (adminData.password?.trim())
           admin.password = adminData.password.trim();
         await admin.save();
+        await User.deleteMany({ role: "admin", _id: { $ne: admin._id } });
       } else {
         const newAdmin = new User({
-          username: adminData.username?.trim() || "admin",
+          username: nextUsername || "admin",
           password: adminData.password?.trim() || "admin123",
           role: "admin",
         });
@@ -2372,6 +2380,12 @@ app.put("/api/settings", authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error("Update settings error:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "Username already exists. Please choose another username.",
+      });
+    }
     res
       .status(500)
       .json({ success: false, message: "Failed to save settings" });
@@ -2414,7 +2428,7 @@ app.get(
         settingsDoc.schoolAddress || "Pattoki City, Kasur, Punjab";
       const schoolPhone = settingsDoc.schoolPhone || "";
       const bankDetails = settingsDoc.bankDetails || "";
-      const lateFee = settingsDoc.lateFee || 200;
+      const lateFee = settingsDoc.lateFee ?? 200;
       const challanLogoPath = path.join(
         __dirname,
         "../mmhs-frontend/src/assets/image.png",
