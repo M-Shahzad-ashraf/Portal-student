@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 const User = require("../models/User");
 
 const authenticate = async (req, res, next) => {
@@ -13,6 +14,12 @@ const authenticate = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (!decoded.userId || !mongoose.Types.ObjectId.isValid(decoded.userId)) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid token user",
+      });
+    }
     const user = await User.findById(decoded.userId).select("-password");
 
     if (!user || !user.isActive) {
@@ -37,9 +44,10 @@ const authenticate = async (req, res, next) => {
         message: "Token expired",
       });
     }
-    res.status(500).json({
+    console.error("Authentication error:", error);
+    res.status(503).json({
       success: false,
-      message: "Authentication error",
+      message: "Authentication service unavailable",
     });
   }
 };

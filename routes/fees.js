@@ -5,6 +5,7 @@ const {
   updateFee,
   getFeeOverview,
   getMonthlyFeeReport,
+  getPaidFeeReport,
   generateChallan,
 } = require("../controllers/feeController");
 const {
@@ -20,6 +21,7 @@ router.use(authenticate);
 // Fee overview (admin only)
 router.get("/overview", authorizeAdmin, getFeeOverview);
 router.get("/report/monthly", authorizeAdmin, getMonthlyFeeReport);
+router.get("/report/paid", authorizeAdmin, getPaidFeeReport);
 
 // Student fee summary (admin or student owner)
 router.get(

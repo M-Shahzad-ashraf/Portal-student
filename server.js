@@ -8,6 +8,16 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
+const dns = require("dns");
+
+try {
+  const dnsServers = process.env.MONGODB_DNS_SERVER
+    ? [process.env.MONGODB_DNS_SERVER, "8.8.8.8", "1.1.1.1"]
+    : ["8.8.8.8", "1.1.1.1"];
+  dns.setServers(dnsServers);
+} catch (dnsErr) {
+  console.warn("Could not set custom DNS servers:", dnsErr.message);
+}
 
 // Import Models
 const Student = require("./models/Student");
@@ -72,8 +82,10 @@ async function initializeDatabase() {
     }
 
     await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 20000,
+      serverSelectionTimeoutMS: 15000,
+      connectTimeoutMS: 15000,
+      socketTimeoutMS: 45000,
+      heartbeatFrequencyMS: 10000,
     });
 
     console.log("✅ MongoDB Connected successfully");
@@ -141,11 +153,26 @@ async function migrateFeeStartMonth() {
   let migrated = 0;
   for (const student of students) {
     student.feeStartMonth = resolveStudentFeeStartMonth(student);
-    await student.save();
+    await saveWithMongoRetry(student);
     migrated++;
   }
 
   console.log(`✅ Migrated feeStartMonth for ${migrated} existing student(s)`);
+}
+
+async function saveWithMongoRetry(document, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await document.save();
+    } catch (error) {
+      const isRetryable =
+        error?.errorLabels?.includes("RetryableWriteError") ||
+        error?.hasErrorLabel?.("RetryableWriteError");
+
+      if (!isRetryable || attempt === attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+    }
+  }
 }
 
 initializeDatabase().catch((err) => {
@@ -465,7 +492,11 @@ app.post("/api/auth/admin/login", async (req, res) => {
   try {
     let user = await User.findOne({ username, role: "admin" });
 
-    if (!user && username === "admin" && !(await User.exists({ role: "admin" }))) {
+    if (
+      !user &&
+      username === "admin" &&
+      !(await User.exists({ role: "admin" }))
+    ) {
       user = new User({
         username: "admin",
         password: "admin123",
@@ -626,66 +657,179 @@ app.get("/api/auth/me", authenticate, async (req, res) => {
 // ==================== DASHBOARD ROUTES (protected) ====================
 app.get("/api/dashboard/stats", authenticate, async (req, res) => {
   try {
-    const totalStudents = await Student.countDocuments({ active: true });
-    const totalClasses = await Class.countDocuments();
-
-    // Get current month fee statistics
     const currentMonth = getCurrentMonthName();
-    const students = await Student.find({ active: true });
+    const currentFeeYear = getFeeYearForMonth(currentMonth);
+    const monthIndex = ACADEMIC_FEE_MONTHS.indexOf(currentMonth);
+    const validFeeStartMonths =
+      monthIndex !== -1
+        ? ACADEMIC_FEE_MONTHS.slice(0, monthIndex + 1)
+        : ACADEMIC_FEE_MONTHS;
+
+    const [totalStudents, totalClasses, classCounts, expenseTotal, aggStats] =
+      await Promise.all([
+        Student.countDocuments({ active: true }),
+        Class.countDocuments(),
+        Class.aggregate([{ $group: { _id: "$campusId", count: { $sum: 1 } } }]),
+        Expense.aggregate([{ $group: { _id: null, total: { $sum: "$amount" } } }]),
+        Student.aggregate([
+          { $match: { active: true } },
+          {
+            $project: {
+              campusId: 1,
+              feeStartMonth: 1,
+              matchedRecord: {
+                $arrayElemAt: [
+                  {
+                    $filter: {
+                      input: { $ifNull: ["$feeRecords", []] },
+                      as: "rec",
+                      cond: {
+                        $and: [
+                          { $eq: ["$$rec.month", currentMonth] },
+                          { $eq: ["$$rec.year", currentFeeYear] },
+                        ],
+                      },
+                    },
+                  },
+                  0,
+                ],
+              },
+            },
+          },
+          {
+            $group: {
+              _id: "$campusId",
+              students: { $sum: 1 },
+              paidStudents: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        {
+                          $in: [
+                            { $ifNull: ["$feeStartMonth", "March"] },
+                            validFeeStartMonths,
+                          ],
+                        },
+                        { $eq: ["$matchedRecord.status", "Paid"] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              partialStudents: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        {
+                          $in: [
+                            { $ifNull: ["$feeStartMonth", "March"] },
+                            validFeeStartMonths,
+                          ],
+                        },
+                        { $eq: ["$matchedRecord.status", "Partial"] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              unpaidStudents: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        {
+                          $in: [
+                            { $ifNull: ["$feeStartMonth", "March"] },
+                            validFeeStartMonths,
+                          ],
+                        },
+                        { $ne: ["$matchedRecord.status", "Paid"] },
+                        { $ne: ["$matchedRecord.status", "Partial"] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              collected: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        {
+                          $in: [
+                            { $ifNull: ["$feeStartMonth", "March"] },
+                            validFeeStartMonths,
+                          ],
+                        },
+                        { $eq: ["$matchedRecord.status", "Paid"] },
+                      ],
+                    },
+                    { $ifNull: ["$matchedRecord.amount", 0] },
+                    {
+                      $cond: [
+                        {
+                          $and: [
+                            {
+                              $in: [
+                                { $ifNull: ["$feeStartMonth", "March"] },
+                                validFeeStartMonths,
+                              ],
+                            },
+                            { $eq: ["$matchedRecord.status", "Partial"] },
+                          ],
+                        },
+                        { $ifNull: ["$matchedRecord.paidAmount", 0] },
+                        0,
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ]),
+      ]);
+
+    const classCountMap = {};
+    classCounts.forEach((c) => {
+      if (c._id) classCountMap[c._id] = c.count;
+    });
+
+    const campusesList = ["boys", "girls", "kids"];
+    const campusStats = {};
     let paid = 0,
       partial = 0,
       unpaid = 0,
       totalCollected = 0;
 
-    students.forEach((student) => {
-      if (isMonthBeforeFeeStart(student, currentMonth)) return;
-
-      const monthRecord = student.feeRecords.find(
-        (r) => r.month === currentMonth,
-      );
-      if (monthRecord) {
-        if (monthRecord.status === "Paid") {
-          paid++;
-          totalCollected += monthRecord.amount;
-        } else if (monthRecord.status === "Partial") {
-          partial++;
-          totalCollected += monthRecord.paidAmount || 0;
-        } else {
-          unpaid++;
-        }
-      } else {
-        unpaid++;
-      }
+    campusesList.forEach((campusId) => {
+      const campusAgg = aggStats.find((a) => a._id === campusId) || {
+        students: 0,
+        paidStudents: 0,
+        partialStudents: 0,
+        unpaidStudents: 0,
+        collected: 0,
+      };
+      campusStats[campusId] = {
+        students: campusAgg.students,
+        classes: classCountMap[campusId] || 0,
+        paidStudents: campusAgg.paidStudents,
+      };
+      paid += campusAgg.paidStudents;
+      partial += campusAgg.partialStudents;
+      unpaid += campusAgg.unpaidStudents;
+      totalCollected += campusAgg.collected;
     });
 
-    const allExpenses = await Expense.find();
-    const totalExpenses = allExpenses.reduce((sum, e) => sum + e.amount, 0);
-
-    const campusesList = ["boys", "girls", "kids"];
-    const campusStats = {};
-
-    for (const campusId of campusesList) {
-      const campusStudents = students.filter((s) => s.campusId === campusId);
-      const campusClassesCount = await Class.countDocuments({ campusId });
-
-      let campusPaid = 0;
-      campusStudents.forEach((student) => {
-        if (isMonthBeforeFeeStart(student, currentMonth)) return;
-
-        const monthRecord = student.feeRecords.find(
-          (r) => r.month === currentMonth,
-        );
-        if (monthRecord && monthRecord.status === "Paid") {
-          campusPaid++;
-        }
-      });
-
-      campusStats[campusId] = {
-        students: campusStudents.length,
-        classes: campusClassesCount,
-        paidStudents: campusPaid,
-      };
-    }
+    const totalExpenses = expenseTotal[0]?.total || 0;
 
     res.json({
       success: true,
@@ -705,7 +849,7 @@ app.get("/api/dashboard/stats", authenticate, async (req, res) => {
           kids: campusStats.kids.students,
         },
         feeStats: {
-          month: getCurrentMonthName(),
+          month: currentMonth,
           year: new Date().getFullYear(),
           paid,
           partial,
@@ -851,9 +995,7 @@ const buildImportColumnMap = (headerRow) => {
         h.includes("phone") || h.includes("mobile") || h.includes("contact"),
     ),
     campus: findCol((h) => h === "campus" || h.includes("campus")),
-    class: findCol(
-      (h) => h === "class" || h === "class id" || h === "classid",
-    ),
+    class: findCol((h) => h === "class" || h === "class id" || h === "classid"),
     section: findCol((h) => h === "section"),
     gender: findCol((h) => h === "gender" || h === "sex"),
     dob: findCol((h) => h === "dob" || h.includes("birth")),
@@ -871,8 +1013,7 @@ const CAMPUS_LABELS = {
   kids: "Abbas Park Campus",
 };
 
-const getCampusLabel = (campusId) =>
-  CAMPUS_LABELS[campusId] || campusId || "";
+const getCampusLabel = (campusId) => CAMPUS_LABELS[campusId] || campusId || "";
 
 const resolveImportCampusId = (input) => {
   const normalized = String(input || "")
@@ -913,8 +1054,7 @@ const resolveImportClass = async (campusId, classInput) => {
 
   if (!classDoc) {
     const count = await Class.countDocuments({ campusId });
-    const prefix =
-      campusId === "boys" ? "b" : campusId === "girls" ? "g" : "k";
+    const prefix = campusId === "boys" ? "b" : campusId === "girls" ? "g" : "k";
     classDoc = new Class({
       id: `${prefix}${count + 1}`,
       campusId,
@@ -1743,51 +1883,115 @@ const buildMonthlyRecordsMap = (
 
 app.get("/api/fees/overview", authenticate, async (req, res) => {
   try {
-    const { campusId, classId, section, month = getCurrentMonthName(), year } = req.query;
+    const {
+      campusId,
+      classId,
+      section,
+      month = getCurrentMonthName(),
+      year,
+    } = req.query;
     const feeYear = year ? parseInt(year) : getFeeYearForMonth(month);
     let query = { active: true };
     if (campusId) query.campusId = campusId;
     if (classId) query.classId = classId;
     if (section) query.section = String(section).toUpperCase();
 
-    const students = await Student.find(query);
+    const monthIndex = ACADEMIC_FEE_MONTHS.indexOf(month);
+    const validFeeStartMonths =
+      monthIndex !== -1
+        ? ACADEMIC_FEE_MONTHS.slice(0, monthIndex + 1)
+        : ACADEMIC_FEE_MONTHS;
 
-    let applicableStudents = 0,
-      paid = 0,
-      partial = 0,
-      unpaid = 0,
-      totalCollected = 0,
-      expectedTotal = 0;
-    students.forEach((student) => {
-      if (isMonthBeforeFeeStart(student, month)) return;
-      applicableStudents++;
+    const [aggResult] = await Student.aggregate([
+      { $match: query },
+      {
+        $project: {
+          monthlyFee: 1,
+          feeStartMonth: 1,
+          isApplicable: {
+            $in: [
+              { $ifNull: ["$feeStartMonth", "March"] },
+              validFeeStartMonths,
+            ],
+          },
+          matchedRecord: {
+            $arrayElemAt: [
+              {
+                $filter: {
+                  input: { $ifNull: ["$feeRecords", []] },
+                  as: "rec",
+                  cond: {
+                    $and: [
+                      { $eq: ["$$rec.month", month] },
+                      { $eq: ["$$rec.year", feeYear] },
+                    ],
+                  },
+                },
+              },
+              0,
+            ],
+          },
+        },
+      },
+      {
+        $match: { isApplicable: true },
+      },
+      {
+        $group: {
+          _id: null,
+          totalStudents: { $sum: 1 },
+          paid: {
+            $sum: { $cond: [{ $eq: ["$matchedRecord.status", "Paid"] }, 1, 0] },
+          },
+          partial: {
+            $sum: {
+              $cond: [{ $eq: ["$matchedRecord.status", "Partial"] }, 1, 0],
+            },
+          },
+          unpaid: {
+            $sum: {
+              $cond: [
+                { $in: ["$matchedRecord.status", ["Paid", "Partial"]] },
+                0,
+                1,
+              ],
+            },
+          },
+          totalCollected: {
+            $sum: {
+              $cond: [
+                { $eq: ["$matchedRecord.status", "Paid"] },
+                { $ifNull: ["$matchedRecord.amount", "$monthlyFee", 0] },
+                {
+                  $cond: [
+                    { $eq: ["$matchedRecord.status", "Partial"] },
+                    { $ifNull: ["$matchedRecord.paidAmount", 0] },
+                    0,
+                  ],
+                },
+              ],
+            },
+          },
+          expectedTotal: {
+            $sum: { $ifNull: ["$matchedRecord.amount", "$monthlyFee", 0] },
+          },
+        },
+      },
+    ]);
 
-      const record = student.feeRecords.find(
-        (r) => r.month === month && r.year === feeYear,
-      );
-      const expectedAmount = record?.amount || student.monthlyFee || 0;
-      expectedTotal += expectedAmount;
-      if (record) {
-        if (record.status === "Paid") {
-          paid++;
-          totalCollected += record.amount || expectedAmount;
-        } else if (record.status === "Partial") {
-          partial++;
-          totalCollected += record.paidAmount || 0;
-        } else {
-          unpaid++;
-        }
-      } else {
-        unpaid++;
-      }
-    });
+    const totalStudents = aggResult?.totalStudents || 0;
+    const paid = aggResult?.paid || 0;
+    const partial = aggResult?.partial || 0;
+    const unpaid = aggResult?.unpaid || 0;
+    const totalCollected = aggResult?.totalCollected || 0;
+    const expectedTotal = aggResult?.expectedTotal || 0;
 
     res.json({
       success: true,
       data: {
         month,
         year: feeYear,
-        totalStudents: applicableStudents,
+        totalStudents,
         paid,
         partial,
         unpaid,
@@ -1809,14 +2013,35 @@ app.get("/api/fees/overview", authenticate, async (req, res) => {
 
 app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
   try {
-    const { month = getCurrentMonthName(), year, campusId, classId, section } = req.query;
+    const {
+      month = getCurrentMonthName(),
+      year,
+      campusId,
+      classId,
+      section,
+    } = req.query;
     const feeYear = year ? parseInt(year) : getFeeYearForMonth(month);
     let query = { active: true };
     if (campusId) query.campusId = campusId;
     if (classId) query.classId = classId;
     if (section) query.section = String(section).toUpperCase();
 
-    const students = await Student.find(query);
+    const students = await Student.find(query, {
+      id: 1,
+      name: 1,
+      campusId: 1,
+      classId: 1,
+      section: 1,
+      rollNo: 1,
+      fatherName: 1,
+      fatherPhone: 1,
+      monthlyFee: 1,
+      feeStartMonth: 1,
+      admissionDate: 1,
+      feeRecords: {
+        $elemMatch: { month, year: feeYear },
+      },
+    }).lean();
 
     const report = students.map((student) => {
       if (isMonthBeforeFeeStart(student, month)) {
@@ -1839,9 +2064,7 @@ app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
         };
       }
 
-      const feeRecord = student.feeRecords.find(
-        (r) => r.month === month && r.year === feeYear,
-      );
+      const feeRecord = (student.feeRecords || [])[0];
       return {
         studentId: student.id,
         studentName: student.name,
@@ -1878,6 +2101,132 @@ app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
   } catch (error) {
     console.error("Monthly report error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch report" });
+  }
+});
+
+app.get("/api/fees/report/paid", authenticate, async (req, res) => {
+  try {
+    const { from, to, campusId, classId, section } = req.query;
+
+    if (!from || !to) {
+      return res.status(400).json({
+        success: false,
+        message: "Both from and to dates are required",
+      });
+    }
+
+    const startDate = new Date(`${from}T00:00:00.000Z`);
+    const endDate = new Date(`${to}T23:59:59.999Z`);
+    if (
+      Number.isNaN(startDate.getTime()) ||
+      Number.isNaN(endDate.getTime()) ||
+      startDate > endDate
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date range",
+      });
+    }
+
+    const query = { active: true };
+    if (campusId) query.campusId = campusId;
+    if (classId) query.classId = classId;
+    if (section) query.section = String(section).toUpperCase();
+
+    const students = await Student.find(
+      {
+        ...query,
+        feeRecords: {
+          $elemMatch: {
+            status: "Paid",
+            paidDate: { $gte: startDate, $lte: endDate },
+          },
+        },
+      },
+      {
+        id: 1,
+        name: 1,
+        campusId: 1,
+        classId: 1,
+        section: 1,
+        fatherName: 1,
+        fatherPhone: 1,
+        feeRecords: 1,
+      },
+    ).lean();
+    const reportMap = new Map();
+
+    students.forEach((student) => {
+      student.feeRecords
+        .filter(
+          (record) =>
+            record.status === "Paid" &&
+            record.paidDate &&
+            record.paidDate >= startDate &&
+            record.paidDate <= endDate,
+        )
+        .forEach((record) => {
+          const existing = reportMap.get(student.id) || {
+            studentId: student.id,
+            studentName: student.name,
+            campusId: student.campusId,
+            classId: student.classId,
+            section: student.section,
+            fatherName: student.fatherName,
+            fatherPhone: student.fatherPhone,
+            payments: [],
+            totalPaid: 0,
+            latestPaidDate: record.paidDate,
+          };
+          const paidAmount = record.paidAmount || record.amount || 0;
+
+          existing.payments.push({
+            month: record.month,
+            year: record.year,
+            paidDate: record.paidDate,
+            amount: paidAmount,
+            receipt: record.receipt,
+          });
+          existing.totalPaid += paidAmount;
+          if (record.paidDate > existing.latestPaidDate) {
+            existing.latestPaidDate = record.paidDate;
+          }
+          reportMap.set(student.id, existing);
+        });
+    });
+
+    const report = Array.from(reportMap.values())
+      .map((student) => ({
+        ...student,
+        paymentCount: student.payments.length,
+        paidMonths: student.payments.map(
+          (payment) => `${payment.month} ${payment.year}`,
+        ),
+      }))
+      .sort(
+        (a, b) =>
+          new Date(b.latestPaidDate) - new Date(a.latestPaidDate) ||
+          a.studentName.localeCompare(b.studentName),
+      );
+
+    res.json({
+      success: true,
+      data: report,
+      summary: {
+        totalStudents: report.length,
+        totalPayments: report.reduce(
+          (sum, student) => sum + student.paymentCount,
+          0,
+        ),
+        totalPaid: report.reduce((sum, student) => sum + student.totalPaid, 0),
+      },
+    });
+  } catch (error) {
+    console.error("Paid fee report error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch paid fee report",
+    });
   }
 });
 
@@ -2633,7 +2982,8 @@ app.get(
             });
         });
 
-        const tableBottom = tableY + headerH + descriptionRows.length * rowH + 4;
+        const tableBottom =
+          tableY + headerH + descriptionRows.length * rowH + 4;
 
         // Status badge (current month)
         const statusColor =

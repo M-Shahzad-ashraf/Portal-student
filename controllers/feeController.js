@@ -195,7 +195,13 @@ const updateFee = async (req, res) => {
 // Get fee overview by campus/class
 const getFeeOverview = async (req, res) => {
   try {
-    const { campusId, classId, section, month = "June", year = 2026 } = req.query;
+    const {
+      campusId,
+      classId,
+      section,
+      month = "June",
+      year = 2026,
+    } = req.query;
 
     let query = { active: true };
     if (campusId) query.campusId = campusId;
@@ -352,6 +358,114 @@ const getMonthlyFeeReport = async (req, res) => {
   }
 };
 
+// Get students with paid fees within a payment-date range
+const getPaidFeeReport = async (req, res) => {
+  try {
+    const { from, to, campusId, classId, section } = req.query;
+
+    if (!from || !to) {
+      return res.status(400).json({
+        success: false,
+        message: "Both from and to dates are required",
+      });
+    }
+
+    const startDate = new Date(`${from}T00:00:00.000Z`);
+    const endDate = new Date(`${to}T23:59:59.999Z`);
+    if (
+      Number.isNaN(startDate.getTime()) ||
+      Number.isNaN(endDate.getTime()) ||
+      startDate > endDate
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date range",
+      });
+    }
+
+    let query = { active: true };
+    if (campusId) query.campusId = campusId;
+    if (classId) query.classId = classId;
+    if (section) query.section = String(section).toUpperCase();
+
+    const students = await Student.find(query).populate("classId");
+    const reportMap = new Map();
+
+    students.forEach((student) => {
+      student.feeRecords
+        .filter(
+          (record) =>
+            record.status === "Paid" &&
+            record.paidDate &&
+            record.paidDate >= startDate &&
+            record.paidDate <= endDate,
+        )
+        .forEach((record) => {
+          const existing = reportMap.get(student.id) || {
+            studentId: student.id,
+            studentName: student.name,
+            campusId: student.campusId,
+            classId: student.classId?._id || student.classId,
+            className: student.classId?.name || student.classId,
+            section: student.section,
+            fatherName: student.fatherName,
+            fatherPhone: student.fatherPhone,
+            payments: [],
+            totalPaid: 0,
+            latestPaidDate: record.paidDate,
+          };
+
+          const paidAmount = record.paidAmount || record.amount || 0;
+          existing.payments.push({
+            month: record.month,
+            year: record.year,
+            paidDate: record.paidDate,
+            amount: paidAmount,
+            receipt: record.receipt,
+          });
+          existing.totalPaid += paidAmount;
+          if (record.paidDate > existing.latestPaidDate) {
+            existing.latestPaidDate = record.paidDate;
+          }
+          reportMap.set(student.id, existing);
+        });
+    });
+
+    const report = Array.from(reportMap.values())
+      .map((student) => ({
+        ...student,
+        paymentCount: student.payments.length,
+        paidMonths: student.payments.map(
+          (payment) => `${payment.month} ${payment.year}`,
+        ),
+      }))
+      .sort(
+        (a, b) =>
+          new Date(b.latestPaidDate) - new Date(a.latestPaidDate) ||
+          a.studentName.localeCompare(b.studentName),
+      );
+
+    res.json({
+      success: true,
+      data: report,
+      summary: {
+        totalStudents: report.length,
+        totalPayments: report.reduce(
+          (sum, student) => sum + student.paymentCount,
+          0,
+        ),
+        totalPaid: report.reduce((sum, student) => sum + student.totalPaid, 0),
+      },
+    });
+  } catch (error) {
+    console.error("Get paid fee report error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch paid fee report",
+    });
+  }
+};
+
 // Generate challan for a student
 const generateChallan = async (req, res) => {
   try {
@@ -458,5 +572,6 @@ module.exports = {
   updateFee,
   getFeeOverview,
   getMonthlyFeeReport,
+  getPaidFeeReport,
   generateChallan,
 };
