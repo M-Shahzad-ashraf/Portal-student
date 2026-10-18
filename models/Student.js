@@ -12,6 +12,7 @@ const feeRecordSchema = new mongoose.Schema({
   paidAmount: { type: Number, default: 0 },
   paidDate: { type: Date },
   receipt: { type: String },
+  receivedAtCampusId: { type: String, enum: ["boys", "girls", "kids"] },
   updatedBy: { type: String },
   updatedAt: { type: Date, default: Date.now },
 });

@@ -51,6 +51,7 @@ const getStudentFeeSummary = async (req, res) => {
             paidAmount: amount,
             paidDate: record.paidDate,
             receipt: record.receipt,
+            receivedAtCampusId: record.receivedAtCampusId,
           });
         } else if (record.status === "Partial") {
           const paid = record.paidAmount || 0;
@@ -63,6 +64,7 @@ const getStudentFeeSummary = async (req, res) => {
             remaining: Math.max(0, amount - paid),
             paidDate: record.paidDate,
             receipt: record.receipt,
+            receivedAtCampusId: record.receivedAtCampusId,
           });
         } else {
           monthlyBreakdown.push({
@@ -109,7 +111,14 @@ const getStudentFeeSummary = async (req, res) => {
 const updateFee = async (req, res) => {
   try {
     const { studentId, month, year = 2026 } = req.params;
-    const { status, amount, paidAmount, paidDate, receipt } = req.body;
+    const {
+      status,
+      amount,
+      paidAmount,
+      paidDate,
+      receipt,
+      receivedAtCampusId,
+    } = req.body;
 
     const student = await Student.findOne({ id: studentId });
 
@@ -139,14 +148,21 @@ const updateFee = async (req, res) => {
         feeRecord.paidAmount = amount || student.monthlyFee;
         feeRecord.paidDate = paidDate || new Date();
         feeRecord.receipt = receipt || generateReceiptNumber();
+        if (receivedAtCampusId) {
+          feeRecord.receivedAtCampusId = receivedAtCampusId;
+        }
       } else if (status === "Partial") {
         feeRecord.paidAmount = paidAmount;
         feeRecord.paidDate = paidDate || new Date();
         feeRecord.receipt = receipt || generateReceiptNumber();
+        if (receivedAtCampusId) {
+          feeRecord.receivedAtCampusId = receivedAtCampusId;
+        }
       } else {
         feeRecord.paidAmount = undefined;
         feeRecord.paidDate = undefined;
         feeRecord.receipt = undefined;
+        feeRecord.receivedAtCampusId = undefined;
       }
       feeRecord.updatedBy = req.user._id;
       feeRecord.updatedAt = new Date();
@@ -165,10 +181,12 @@ const updateFee = async (req, res) => {
         newRecord.paidAmount = amount || student.monthlyFee;
         newRecord.paidDate = paidDate || new Date();
         newRecord.receipt = receipt || generateReceiptNumber();
+        newRecord.receivedAtCampusId = receivedAtCampusId;
       } else if (status === "Partial") {
         newRecord.paidAmount = paidAmount;
         newRecord.paidDate = paidDate || new Date();
         newRecord.receipt = receipt || generateReceiptNumber();
+        newRecord.receivedAtCampusId = receivedAtCampusId;
       }
 
       student.feeRecords.push(newRecord);
@@ -334,6 +352,7 @@ const getMonthlyFeeReport = async (req, res) => {
         amount: feeRecord?.amount || student.monthlyFee || 0,
         paidDate: feeRecord?.paidDate,
         receipt: feeRecord?.receipt,
+        receivedAtCampusId: feeRecord?.receivedAtCampusId,
         feeStartMonth: resolveStudentFeeStartMonth(student),
       };
     });
@@ -384,12 +403,12 @@ const getPaidFeeReport = async (req, res) => {
     }
 
     let query = { active: true };
-    if (campusId) query.campusId = campusId;
     if (classId) query.classId = classId;
     if (section) query.section = String(section).toUpperCase();
 
     const students = await Student.find(query).populate("classId");
     const reportMap = new Map();
+    const campusTotals = new Map();
 
     students.forEach((student) => {
       student.feeRecords
@@ -398,7 +417,8 @@ const getPaidFeeReport = async (req, res) => {
             record.status === "Paid" &&
             record.paidDate &&
             record.paidDate >= startDate &&
-            record.paidDate <= endDate,
+            record.paidDate <= endDate &&
+            (!campusId || record.receivedAtCampusId === campusId),
         )
         .forEach((record) => {
           const existing = reportMap.get(student.id) || {
@@ -422,8 +442,18 @@ const getPaidFeeReport = async (req, res) => {
             paidDate: record.paidDate,
             amount: paidAmount,
             receipt: record.receipt,
+            receivedAtCampusId: record.receivedAtCampusId,
           });
           existing.totalPaid += paidAmount;
+          const receivingCampusId = record.receivedAtCampusId || null;
+          const campusTotal = campusTotals.get(receivingCampusId) || {
+            campusId: receivingCampusId,
+            totalPaid: 0,
+            totalPayments: 0,
+          };
+          campusTotal.totalPaid += paidAmount;
+          campusTotal.totalPayments += 1;
+          campusTotals.set(receivingCampusId, campusTotal);
           if (record.paidDate > existing.latestPaidDate) {
             existing.latestPaidDate = record.paidDate;
           }
@@ -455,6 +485,9 @@ const getPaidFeeReport = async (req, res) => {
           0,
         ),
         totalPaid: report.reduce((sum, student) => sum + student.totalPaid, 0),
+        campusTotals: Array.from(campusTotals.values()).sort((a, b) =>
+          String(a.campusId || "").localeCompare(String(b.campusId || "")),
+        ),
       },
     });
   } catch (error) {

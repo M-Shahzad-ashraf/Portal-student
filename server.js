@@ -2060,6 +2060,7 @@ app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
           amount: 0,
           paidDate: null,
           receipt: null,
+          receivedAtCampusId: null,
           feeStartMonth: resolveStudentFeeStartMonth(student),
         };
       }
@@ -2083,6 +2084,7 @@ app.get("/api/fees/report/monthly", authenticate, async (req, res) => {
         amount: feeRecord?.amount || student.monthlyFee || 0,
         paidDate: feeRecord?.paidDate,
         receipt: feeRecord?.receipt,
+        receivedAtCampusId: feeRecord?.receivedAtCampusId,
         feeStartMonth: resolveStudentFeeStartMonth(student),
       };
     });
@@ -2186,6 +2188,7 @@ app.get("/api/fees/report/paid", authenticate, async (req, res) => {
             paidDate: record.paidDate,
             amount: paidAmount,
             receipt: record.receipt,
+            receivedAtCampusId: record.receivedAtCampusId,
           });
           existing.totalPaid += paidAmount;
           if (record.paidDate > existing.latestPaidDate) {
@@ -2302,7 +2305,41 @@ app.put(
   async (req, res) => {
     try {
       const { studentId, month, year } = req.params;
-      const { status, amount, paidAmount, paidDate, receipt } = req.body;
+      const {
+        status,
+        amount,
+        paidAmount,
+        paidDate,
+        receipt,
+        receivedAtCampusId,
+      } = req.body;
+
+      if (
+        !CALENDAR_MONTHS.includes(month) ||
+        !Number.isInteger(Number(year)) ||
+        Number(year) < 2000 ||
+        Number(year) > 2100
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid fee month or year",
+        });
+      }
+      if (!["Paid", "Partial", "Unpaid"].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid fee status",
+        });
+      }
+      if (
+        (status === "Paid" || status === "Partial") &&
+        !["boys", "girls", "kids"].includes(receivedAtCampusId)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "A valid receiving campus is required for paid fees",
+        });
+      }
 
       const student = await Student.findOne({ id: studentId });
       if (!student) {
@@ -2329,14 +2366,17 @@ app.put(
           feeRecord.paidAmount = amount || student.monthlyFee;
           feeRecord.paidDate = paidDate || new Date();
           feeRecord.receipt = receipt || `RCP${Date.now()}`;
+          feeRecord.receivedAtCampusId = receivedAtCampusId;
         } else if (status === "Partial") {
           feeRecord.paidAmount = paidAmount;
           feeRecord.paidDate = paidDate || new Date();
           feeRecord.receipt = receipt || `RCP${Date.now()}`;
+          feeRecord.receivedAtCampusId = receivedAtCampusId;
         } else {
           feeRecord.paidAmount = undefined;
           feeRecord.paidDate = undefined;
           feeRecord.receipt = undefined;
+          feeRecord.receivedAtCampusId = undefined;
         }
       } else {
         const newRecord = {
@@ -2349,10 +2389,12 @@ app.put(
           newRecord.paidAmount = amount || student.monthlyFee;
           newRecord.paidDate = paidDate || new Date();
           newRecord.receipt = receipt || `RCP${Date.now()}`;
+          newRecord.receivedAtCampusId = receivedAtCampusId;
         } else if (status === "Partial") {
           newRecord.paidAmount = paidAmount;
           newRecord.paidDate = paidDate || new Date();
           newRecord.receipt = receipt || `RCP${Date.now()}`;
+          newRecord.receivedAtCampusId = receivedAtCampusId;
         }
         student.feeRecords.push(newRecord);
       }

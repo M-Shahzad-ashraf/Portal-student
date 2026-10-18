@@ -1,4 +1,5 @@
 const { body, param, query, validationResult } = require("express-validator");
+const { CALENDAR_MONTHS } = require("../utils/feeUtils");
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -34,14 +35,24 @@ const studentValidation = [
 
 // Fee update validation
 const feeValidation = [
-  body("month").notEmpty().withMessage("Month is required"),
-  body("year").optional().isInt({ min: 2000, max: 2100 }),
+  param("month").isIn(CALENDAR_MONTHS).withMessage("Invalid month"),
+  param("year").isInt({ min: 2000, max: 2100 }).withMessage("Invalid year"),
   body("status")
     .isIn(["Paid", "Partial", "Unpaid"])
     .withMessage("Invalid status"),
   body("amount").isInt({ min: 0 }).withMessage("Amount must be positive"),
   body("paidAmount").optional().isInt({ min: 0 }),
   body("receipt").optional().trim(),
+  body("receivedAtCampusId").custom((value, { req }) => {
+    const needsCampus = req.body.status === "Paid" || req.body.status === "Partial";
+    if (needsCampus && !["boys", "girls", "kids"].includes(value)) {
+      throw new Error("A valid receiving campus is required");
+    }
+    if (value && !["boys", "girls", "kids"].includes(value)) {
+      throw new Error("Invalid payment campus");
+    }
+    return true;
+  }),
 ];
 
 // Login validation
